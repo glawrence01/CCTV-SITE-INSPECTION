@@ -1,0 +1,15 @@
+const assets=__ASSETS__;
+const common=['school','date','time','officer','shift'];
+const required={register:['school','camera','location','installation'],camera:[...common,'camera','location','recorder','live','playback','power','fault'],recorder:[...common,'recorder','power','storage','playback','monitor'],note:[...common,'observation'],action:[...common,'action','state']};
+const allowed={register:['recorder','remarks'],camera:['remarks'],recorder:['earliest','remarks'],note:['remarks'],action:['camera','recorder','owner','due','remarks']};
+const reply=(body,status=200)=>new Response(body,{status,headers:{'Cache-Control':'no-store'}});
+export default {async fetch(req,env){let u=new URL(req.url);if(u.pathname!='/api/records'){let item=assets[u.pathname];if(!item)return reply('Page not found',404);return new Response(Uint8Array.from(atob(item[1]),c=>c.charCodeAt(0)),{headers:{'Content-Type':item[0],'Content-Security-Policy':"frame-ancestors 'self' https://sites.google.com https://*.googleusercontent.com https://*.chatgpt.com"}})}
+try{if(req.method==='GET'){let {results}=await env.DB.prepare('SELECT id,kind,payload,rowid FROM records ORDER BY rowid DESC').all();return Response.json(results.map(r=>{let p=JSON.parse(r.payload);return {...p,id:r.id,kind:r.kind,version:p.version||1}}),{headers:{'Cache-Control':'no-store'}})}
+if(req.method!=='POST')return reply('Unsupported method',405);if(req.headers.get('Origin')!==u.origin||!req.headers.get('Content-Type')?.startsWith('application/json'))return reply('Invalid request origin',403);
+let {id,kind,payload,update,version}=await req.json();if(!Object.hasOwn(required,kind)||!payload||typeof payload!=='object'||!/^[0-9a-f-]{36}$/i.test(id))return reply('Invalid record.',400);
+let body={};for(let k of [...required[kind],...allowed[kind]]){if(typeof payload[k]==='string')body[k]=payload[k].trim();if((body[k]?.length||0)>3000)return reply('Entry too long.',400)}
+if(required[kind].some(k=>!body[k])||(kind==='register'&&body.installation==='Installed'&&!body.recorder))return reply('Complete the required fields.',400);
+if(body.earliest&&body.earliest>body.date)return reply('Earliest recording must be on or before the inspection date.',400);
+if(update){if(!['action','register'].includes(kind))return reply('Inspection history is read only.',400);body.version=Number(version)+1;let result=await env.DB.prepare("UPDATE records SET payload=? WHERE id=? AND kind=? AND coalesce(json_extract(payload,'$.version'),1)=?").bind(JSON.stringify(body),id,kind,version).run();if(!result.meta.changes)return reply('This record changed. Close the form and refresh before editing.',409)}
+else{body.version=1;await env.DB.prepare('INSERT INTO records(id,kind,payload) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,kind,JSON.stringify(body)).run()}return reply('Saved')}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number already exists at this school.',409);return reply('Records are unavailable. Please try again.',503)}}}
+
