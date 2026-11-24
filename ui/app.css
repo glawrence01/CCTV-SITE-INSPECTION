@@ -8,3 +8,4 @@
 .settings-menu{display:grid;gap:12px}.permission-option{display:flex;align-items:center;gap:10px;margin:12px 0}.permission-option input{width:18px;height:18px;flex:none}fieldset{border:1px solid #d9e2ed;border-radius:8px;padding:16px;margin:16px 0}fieldset p{font-size:14px}.userForm{border-top:1px solid #d9e2ed;padding:20px 0}dialog section{padding:12px 0}
 
 .incident-search{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:12px 0}.incident-search label{flex:1;min-width:220px}.incident-search input{width:100%}.incident-search button{min-height:42px}
+.owner-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0}#ownerBody{margin-top:20px}#ownerBody td{max-width:380px;white-space:normal;overflow-wrap:anywhere}#ownerBody .scroll{margin-top:16px}

@@ -40,7 +40,7 @@ async function accountRoutes(req,env,user,url){
   const path=url.pathname;
   if(path==='/api/me'){
     const businesses=(await env.DB.prepare('SELECT * FROM businesses WHERE id=?').bind(user.business_id).all()).results;
-    return jsonResponse({id:user.id,email:user.email,role:user.role,business_id:user.business_id,permissions:permissionsFor(user),businesses});
+    return jsonResponse({id:user.id,email:user.email,role:user.role,business_id:user.business_id,permissions:permissionsFor(user),platform_owner:isPlatformOwner(user,env),active:user.active,businesses});
   }
   if(path==='/api/onboard'&&req.method==='POST'){
     const {name}=await req.json();
@@ -152,12 +152,16 @@ async function handleRequest(req,env){
     else if(action==='verify')result=await authCall(env,'/verify',{email:body.email,token:body.token,type:body.type==='recovery'?'recovery':'signup'});
     else if(action==='resend')result=await authCall(env,'/resend',{email:body.email,type:'signup'});
     else return reply('Unknown action',404);
+    if(['signup','recover','resend'].includes(action))await logEmailEvent(env,body.email,action,result.ok?'Accepted by authentication provider (delivery unconfirmed)':'Rejected by authentication provider');
     if(!result.ok)return reply(result.data.msg||result.data.error_description||result.data.message||'Authentication failed.',400);
     return result.data.access_token?setSession(jsonResponse({signedIn:true}),result.data):jsonResponse({sent:true});
   }
   const user=await identity(req,env);
   if(!user)return reply('Please sign in with a verified email.',401);
-  if(!user.active)return reply('This account has been suspended. Contact your business administrator.',403);
+  if(user.platform_blocked)return reply('This account has been suspended by the software owner.',403);
+  if(!user.active&&!(isPlatformOwner(user,env)&&(path.startsWith('/api/owner/')||path==='/api/me'||path==='/api/password')))return reply('This account has been suspended. Contact your business administrator.',403);
+  if(path.startsWith('/api/owner/'))return ownerRoutes(req,env,user,url);
+  if(user.business_id&&!(isPlatformOwner(user,env)&&(path==='/api/me'||path==='/api/password'))){const tenant=await env.DB.prepare('SELECT suspended FROM businesses WHERE id=?').bind(user.business_id).first();if(tenant?.suspended)return reply('This business account is suspended. Contact support.',403)}
   if(path==='/api/password'&&req.method==='POST'){
     const {password}=await req.json();
     if(typeof password!=='string'||password.length<10)return reply('Use at least 10 characters.',400);

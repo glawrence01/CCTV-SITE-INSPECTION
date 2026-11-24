@@ -1,0 +1,13 @@
+import vm from 'node:vm';import {readFileSync} from 'node:fs';import assert from 'node:assert/strict';
+const nodes=new Map();const el=id=>{if(!nodes.has(id))nodes.set(id,{hidden:false,style:{},innerHTML:''});return nodes.get(id)};
+const context=vm.createContext({document:{querySelector:el,querySelectorAll:()=>[]},byId:el,account:{platform_owner:true,email:'owner@example.test'},safe:v=>String(v??'').replaceAll('<','&lt;').replaceAll('>','&gt;'),apiFetch:async url=>Response.json(url.endsWith('summary')?{counts:{businesses:2,accounts:3,access_invites:1,support_cases:1},unpaid:[],billing_mode:'Manual',email_status:'Unconfirmed'}:{rows:[{id:'1',email:'<script>test</script>',business:'Business A',role:'technician',active:1,platform_blocked:0}],more:false}),Intl,console});
+vm.runInContext(readFileSync('ui/owner.js','utf8'),context);
+await vm.runInContext('showOwnerConsole()',context);
+assert.ok(el('ownerBody').innerHTML.includes('Businesses'));
+await vm.runInContext("ownerTab='users';showOwnerConsole()",context);
+assert.ok(el('ownerBody').innerHTML.includes('Manage access'));
+assert.ok(!el('ownerBody').innerHTML.includes('<script>'));
+assert.ok(el('ownerBody').innerHTML.includes('&lt;script&gt;'));
+await vm.runInContext("ownerTab='email';showOwnerConsole()",context);
+assert.ok(el('ownerBody').innerHTML.includes('does not confirm delivery'));
+console.log('PASS owner console overview, user controls, escaped data and email-delivery caveat');

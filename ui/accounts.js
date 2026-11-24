@@ -48,6 +48,7 @@ async function startAccount(){
     if(r.status===401){showAuth();return}
     if(!r.ok)throw Error(await r.text());
     account=await r.json();
+    if(account.platform_owner){businessId=account.business_id||'';await showOwnerConsole();if(fragment.get('type')==='recovery')showSettings('password');return}
     if(!account.business_id){showOnboarding();return}
     if(!account.businesses.some(b=>b.id===businessId))businessId=account.business_id;
     await loadBusiness();
@@ -68,7 +69,8 @@ async function loadBusiness(){
   document.querySelector('.workspace').textContent=business.name;
   document.querySelector('.kicker').textContent=business.name;
   document.querySelector('.secure').textContent=account.role.replace('_',' ');
-  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span><button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
+  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.platform_owner?'<button id="ownerButton">Owner Console</button>':'')+'<button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
+  if(byId('ownerButton'))byId('ownerButton').onclick=()=>showOwnerConsole();
   byId('settingsButton').onclick=()=>showSettings();
   byId('logoutButton').onclick=async()=>{await send('/api/auth/logout',{});account=null;data=[];showAuth()};
   await refresh();
