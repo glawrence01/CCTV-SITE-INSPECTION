@@ -14,6 +14,10 @@ async function authCall(env,path,body,token){
   const data=await response.json();
   return {ok:response.ok,data};
 }
+const permissionKeys=['register_cameras','inspect','observations','manage_actions','manage_properties','view_reports'];
+function permissionsFor(user){return user.role==='super_admin'?permissionKeys:user.permissions===null||user.permissions===undefined?(user.role==='technician'?permissionKeys:[]):JSON.parse(user.permissions)}
+function permitted(user,key){return permissionsFor(user).includes(key)}
+const recordPermission={register:'register_cameras',registerBatch:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions'};
 async function identity(req,env){
   let token=cookie(req,'xh_access'),session;
   let result=token?await authCall(env,'/user',null,token):{ok:false};
@@ -25,14 +29,18 @@ async function identity(req,env){
   const user=result.data,email=user.email.toLowerCase();
   await env.DB.prepare("INSERT INTO businesses(id,name) VALUES('xposure','Xposure Hub Limited') ON CONFLICT(id) DO NOTHING").run();
   await env.DB.prepare("INSERT INTO accounts(id,email,business_id,role) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET email=excluded.email").bind(user.id,email,email===env.SUPER_ADMIN_EMAIL?'xposure':null,email===env.SUPER_ADMIN_EMAIL?'super_admin':'viewer').run();
+  // Older self-created businesses have a deterministic creator ID. Upgrade only that creator.
+  await env.DB.prepare("UPDATE accounts SET role='super_admin' WHERE id=? AND business_id=?").bind(user.id,'business-'+user.id).run();
+  await env.DB.prepare("UPDATE accounts SET business_id=(SELECT business_id FROM access_invites WHERE email=?),role=(SELECT role FROM access_invites WHERE email=?),permissions=(SELECT permissions FROM access_invites WHERE email=?),active=(SELECT active FROM access_invites WHERE email=?) WHERE id=? AND business_id IS NULL AND EXISTS(SELECT 1 FROM access_invites WHERE email=?)").bind(email,email,email,email,user.id,email).run();
   const account=await env.DB.prepare('SELECT * FROM accounts WHERE id=?').bind(user.id).first();
+  if(account.business_id)await env.DB.prepare('DELETE FROM access_invites WHERE email=? AND business_id=?').bind(email,account.business_id).run();
   return {...account,session};
 }
 async function accountRoutes(req,env,user,url){
   const path=url.pathname;
   if(path==='/api/me'){
-    const businesses=user.role==='super_admin'?(await env.DB.prepare('SELECT * FROM businesses ORDER BY name').all()).results:(await env.DB.prepare('SELECT * FROM businesses WHERE id=?').bind(user.business_id).all()).results;
-    return jsonResponse({id:user.id,email:user.email,role:user.role,business_id:user.business_id,businesses});
+    const businesses=(await env.DB.prepare('SELECT * FROM businesses WHERE id=?').bind(user.business_id).all()).results;
+    return jsonResponse({id:user.id,email:user.email,role:user.role,business_id:user.business_id,permissions:permissionsFor(user),businesses});
   }
   if(path==='/api/onboard'&&req.method==='POST'){
     const {name}=await req.json();
@@ -41,27 +49,49 @@ async function accountRoutes(req,env,user,url){
     const bid='business-'+user.id;
     await env.DB.batch([
       env.DB.prepare('INSERT INTO businesses(id,name) VALUES(?,?) ON CONFLICT(id) DO NOTHING').bind(bid,name.trim()),
-      env.DB.prepare("UPDATE accounts SET business_id=?,role='technician' WHERE id=? AND business_id IS NULL").bind(bid,user.id)
+      env.DB.prepare("UPDATE accounts SET business_id=?,role='super_admin' WHERE id=? AND business_id IS NULL").bind(bid,user.id)
     ]);
     return jsonResponse({saved:true});
   }
+  const bid=user.business_id;
+  if(req.headers.get('X-Business-ID')&&req.headers.get('X-Business-ID')!==bid)return reply('Business access denied.',403);
   if(path==='/api/admin/users'){
-    if(user.role!=='super_admin')return reply('Super Admin access required.',403);
-    if(req.method==='GET')return jsonResponse((await env.DB.prepare('SELECT a.*,b.name AS business FROM accounts a LEFT JOIN businesses b ON b.id=a.business_id ORDER BY a.email').all()).results);
+    if(user.role!=='super_admin'||!bid)return reply('Business Super Admin access required.',403);
+    if(req.method==='GET'){
+      const members=(await env.DB.prepare('SELECT id,email,role,permissions,active FROM accounts WHERE business_id=? ORDER BY email').bind(bid).all()).results;
+      const pending=(await env.DB.prepare('SELECT email,role,permissions,active FROM access_invites WHERE business_id=? ORDER BY email').bind(bid).all()).results;
+      return jsonResponse([...members.map(u=>({...u,permissions:permissionsFor(u)})),...pending.map(u=>({...u,pending:true,permissions:permissionsFor(u)}))]);
+    }
     const body=await req.json();
-    if(body.id===user.id||!['viewer','technician'].includes(body.role)||![0,1].includes(body.active))return reply('Invalid account change.',400);
-    const business=await env.DB.prepare('SELECT id FROM businesses WHERE id=?').bind(body.business_id).first();
-    if(!business)return reply('Select a business.',400);
-    await env.DB.prepare("UPDATE accounts SET role=?,business_id=?,active=? WHERE id=? AND role!='super_admin'").bind(body.role,body.business_id,body.active,body.id).run();
+    if(!['viewer','technician'].includes(body.role)||![0,1].includes(body.active)||!Array.isArray(body.permissions)||body.permissions.some(p=>!permissionKeys.includes(p)))return reply('Choose a valid role and permissions.',400);
+    if(body.business_id&&body.business_id!==bid)return reply('Business access denied.',403);
+    const permissions=JSON.stringify([...new Set(body.permissions)]);
+    if(body.id){
+      const target=await env.DB.prepare('SELECT id,role FROM accounts WHERE id=? AND business_id=?').bind(body.id,bid).first();
+      if(!target)return reply('User not found in your business.',404);
+      if(target.role==='super_admin')return reply('The business owner keeps Super Admin access.',400);
+      await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=?').bind(body.role,permissions,body.active,body.id,bid).run();
+    }else{
+      const email=typeof body.email==='string'?body.email.trim().toLowerCase():'';
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return reply('Enter a valid email address.',400);
+      const target=await env.DB.prepare('SELECT id,business_id,role FROM accounts WHERE email=?').bind(email).first();
+      const pending=await env.DB.prepare('SELECT business_id FROM access_invites WHERE email=?').bind(email).first();
+      if((target?.business_id&&target.business_id!==bid)||(pending&&pending.business_id!==bid))return reply('This email cannot be added to this business. Use a different email.',409);
+      if(target?.role==='super_admin')return reply('The business owner keeps Super Admin access.',400);
+      if(target?.business_id===bid){
+        await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=?').bind(body.role,permissions,body.active,target.id,bid).run();
+      }else{
+        await env.DB.prepare('INSERT INTO access_invites(email,business_id,role,permissions,active) VALUES(?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET role=excluded.role,permissions=excluded.permissions,active=excluded.active WHERE access_invites.business_id=excluded.business_id').bind(email,bid,body.role,permissions,body.active).run();
+      }
+    }
     return jsonResponse({saved:true});
   }
-  const bid=user.role==='super_admin'?(req.headers.get('X-Business-ID')||user.business_id):user.business_id;
   if(!bid)return reply('Create your business first.',403);
   if(req.headers.get('X-Business-ID')&&req.headers.get('X-Business-ID')!==bid)return reply('Business access denied.',403);
   const business=await env.DB.prepare('SELECT * FROM businesses WHERE id=?').bind(bid).first();
   if(!business)return reply('Business not found.',404);
   if(path==='/api/business'&&req.method==='POST'){
-    if(user.role==='viewer')return reply('View-only access.',403);
+    if(!permitted(user,'manage_properties'))return reply('Property management permission required.',403);
     const {name}=await req.json();
     if(typeof name!=='string'||!name.trim()||name.length>150)return reply('Enter a business name.',400);
     await env.DB.prepare('UPDATE businesses SET name=? WHERE id=?').bind(name.trim(),bid).run();
@@ -71,24 +101,25 @@ async function accountRoutes(req,env,user,url){
     // Existing installations become named school properties within their original business.
     await env.DB.prepare("INSERT OR IGNORE INTO properties(id,business_id,name,type) SELECT lower(hex(randomblob(16))),business_id,json_extract(payload,'$.school'),'School' FROM records WHERE business_id=? AND json_extract(payload,'$.school') IS NOT NULL GROUP BY business_id,json_extract(payload,'$.school')").bind(bid).run();
     if(req.method==='GET')return jsonResponse((await env.DB.prepare('SELECT * FROM properties WHERE business_id=? ORDER BY name').bind(bid).all()).results);
-    if(user.role==='viewer')return reply('View-only access.',403);
+    if(!permitted(user,'manage_properties'))return reply('Property management permission required.',403);
     const body=await req.json();
     if(typeof body.name!=='string'||!body.name.trim()||body.name.length>200||!['Apartment','School','Estate','Store','Office','Other'].includes(body.type))return reply('Enter a location and property type.',400);
     await env.DB.prepare('INSERT INTO properties(id,business_id,name,type) VALUES(?,?,?,?)').bind(crypto.randomUUID(),bid,body.name.trim(),body.type).run();
     return jsonResponse({saved:true});
   }
   if(path==='/api/records'){
-    if(req.method!=='GET'&&user.role==='viewer')return reply('View-only access.',403);
+    
     if(req.method==='POST'){
       const body=await req.clone().json();
+      if(!permitted(user,recordPermission[body.kind]))return reply('You do not have permission for this action.',403);
       const property=await env.DB.prepare('SELECT id FROM properties WHERE business_id=? AND name=?').bind(bid,body.payload?.school||'').first();
       if(!property)return reply('Create or select a property first.',400);
     }
     const response=await recordRoutes(req,env,bid);
-    if(req.method==='GET'&&user.role==='viewer'&&response.ok){
+    if(req.method==='GET'&&!permitted(user,'view_reports')&&response.ok){
       const rows=await response.json();
       const fields=['id','kind','school','date','time','camera','location','recorder','installation','live','playback','power','storage','monitor','fault','channels'];
-      return jsonResponse(rows.filter(r=>['register','camera','round','recorder'].includes(r.kind)).map(r=>Object.fromEntries(fields.filter(k=>k in r).map(k=>[k,r[k]]))));
+      return jsonResponse(rows.filter(r=>['register','camera','round','recorder'].includes(r.kind)||permitted(user,recordPermission[r.kind])).map(r=>permitted(user,recordPermission[r.kind])?r:Object.fromEntries(fields.filter(k=>k in r).map(k=>[k,r[k]]))));
     }
     return response;
   }
@@ -126,7 +157,7 @@ async function handleRequest(req,env){
   }
   const user=await identity(req,env);
   if(!user)return reply('Please sign in with a verified email.',401);
-  if(!user.active)return reply('This account has been suspended. Contact Xposure Hub.',403);
+  if(!user.active)return reply('This account has been suspended. Contact your business administrator.',403);
   if(path==='/api/password'&&req.method==='POST'){
     const {password}=await req.json();
     if(typeof password!=='string'||password.length<10)return reply('Use at least 10 characters.',400);

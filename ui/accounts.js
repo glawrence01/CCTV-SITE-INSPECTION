@@ -1,4 +1,7 @@
 let account=null,properties=[],businessId='';
+const permissionLabels={register_cameras:'Register and edit cameras',inspect:'Submit camera and DVR inspections',observations:'Add observations',manage_actions:'Create and update action points',manage_properties:'Manage business name and properties',view_reports:'View full reports, remarks and history'};
+const can=p=>account?.role==='super_admin'||account?.permissions?.includes(p);
+const permissionForKind={register:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions'};
 const byId=id=>document.getElementById(id);
 const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function apiFetch(url,options={}){
@@ -65,11 +68,8 @@ async function loadBusiness(){
   document.querySelector('.workspace').textContent=business.name;
   document.querySelector('.kicker').textContent=business.name;
   document.querySelector('.secure').textContent=account.role.replace('_',' ');
-  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.role==='super_admin'?'<select id="businessSelect" aria-label="Business">'+account.businesses.map(b=>'<option value="'+safe(b.id)+'" '+(b.id===businessId?'selected':'')+'>'+safe(b.name)+'</option>').join('')+'</select><button id="usersButton">Manage users</button>':'')+(account.role!=='viewer'?'<button id="propertiesButton">Properties & business</button>':'')+'<button id="passwordButton">Change password</button><button id="logoutButton">Sign out</button></div>';
-  if(byId('businessSelect'))byId('businessSelect').onchange=async e=>{businessId=e.target.value;Object.keys(filter).forEach(k=>filter[k]='');try{await loadBusiness()}catch(error){byId('notice').textContent=error.message}};
-  if(byId('propertiesButton'))byId('propertiesButton').onclick=()=>showSettings();
-  if(byId('usersButton'))byId('usersButton').onclick=showUsers;
-  byId('passwordButton').onclick=()=>showSettings('password');
+  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span><button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
+  byId('settingsButton').onclick=()=>showSettings();
   byId('logoutButton').onclick=async()=>{await send('/api/auth/logout',{});account=null;data=[];showAuth()};
   await refresh();
 }
@@ -78,6 +78,10 @@ function settingsDialog(title,content){
   document.body.append(d);d.querySelector('[data-close]').onclick=()=>d.close();d.addEventListener('close',()=>d.remove());d.showModal();return d;
 }
 function showSettings(mode){
+  if(!mode){
+    const d=settingsDialog('Settings','<p>Manage your account and '+safe(account.businesses[0].name)+'.</p><div class="settings-menu">'+(account.role==='super_admin'?'<button data-setting="users">Users & permissions</button>':'')+(can('manage_properties')?'<button data-setting="properties">Business & properties</button>':'')+'<button data-setting="password">Change password</button></div>');
+    d.querySelectorAll('[data-setting]').forEach(b=>b.onclick=()=>{d.close();b.dataset.setting==='users'?showUsers():showSettings(b.dataset.setting)});return;
+  }
   if(mode==='password'){
     const d=settingsDialog('Change password','<form>'+authField('New password','password','password')+'<button class="primary">Save password</button></form>');
     d.querySelector('form').onsubmit=async e=>{e.preventDefault();try{await send('/api/password',Object.fromEntries(new FormData(e.target)));d.close()}catch(error){d.querySelector('.settingsError').textContent=error.message}};return;
@@ -89,10 +93,23 @@ function showSettings(mode){
     d.querySelector('#'+form).onsubmit=async e=>{e.preventDefault();try{await send(url,Object.fromEntries(new FormData(e.target)));d.close();await startAccount()}catch(error){d.querySelector('.settingsError').textContent=error.message}};
   }
 }
+function accessControls(user={role:'technician',permissions:Object.keys(permissionLabels),active:1}){
+  return '<label>Role<select name="role"><option value="technician" '+(user.role==='technician'?'selected':'')+'>Technician</option><option value="viewer" '+(user.role==='viewer'?'selected':'')+'>Viewer</option></select></label><fieldset><legend>Permissions</legend><p>All users can view camera status. Choose additional access below.</p>'+Object.entries(permissionLabels).map(([key,label])=>'<label class="permission-option"><input type="checkbox" name="permissions" value="'+key+'" '+(user.permissions.includes(key)?'checked':'')+'>'+label+'</label>').join('')+'</fieldset><label>Account status<select name="active"><option value="1" '+(user.active?'selected':'')+'>Active</option><option value="0" '+(!user.active?'selected':'')+'>Suspended</option></select></label>';
+}
 async function showUsers(){
   try{
     const response=await apiFetch('/api/admin/users');if(!response.ok)throw Error(await response.text());const users=await response.json();
-    const d=settingsDialog('Manage registered users','<p>Accounts shown here have verified their email and signed in. Assign each person to a business and role.</p>'+users.map(u=>'<form class="userForm" data-id="'+safe(u.id)+'"><strong>'+safe(u.email)+'</strong>'+(u.role==='super_admin'?'<p>Super Admin</p>':'<label>Business<select name="business_id">'+account.businesses.map(b=>'<option value="'+safe(b.id)+'" '+(b.id===u.business_id?'selected':'')+'>'+safe(b.name)+'</option>').join('')+'</select></label><label>Role<select name="role"><option '+(u.role==='viewer'?'selected':'')+' value="viewer">Viewer</option><option '+(u.role==='technician'?'selected':'')+' value="technician">Technician</option></select></label><label>Account status<select name="active"><option value="1" '+(u.active?'selected':'')+'>Active</option><option value="0" '+(!u.active?'selected':'')+'>Suspended</option></select></label><button>Save access</button>')+'</form>').join(''));
-    d.querySelectorAll('.userForm').forEach(f=>f.onsubmit=async e=>{e.preventDefault();try{let body=Object.fromEntries(new FormData(f));body.id=f.dataset.id;body.active=Number(body.active);await send('/api/admin/users',body);d.querySelector('.settingsError').textContent='Access updated.'}catch(error){d.querySelector('.settingsError').textContent=error.message}});
+    const d=settingsDialog('Users & permissions','<p>You manage users only within '+safe(account.businesses[0].name)+'. Your business owner retains Super Admin access.</p><section><h3>Add user</h3><p>Enter their email and choose access. Share this site address with them. They must register and verify that same email, or sign in if already registered. No invitation email is sent.</p><form id="addUserForm">'+authField('User email','email','email')+accessControls()+'<button class="primary">Add user</button></form></section><hr><h3>Your team</h3>'+users.map(u=>'<form class="userForm" data-id="'+safe(u.id||'')+'" data-email="'+safe(u.email)+'"><strong>'+safe(u.email)+'</strong>'+(u.role==='super_admin'?'<p>Super Admin · Business owner</p>':'<p>'+(u.pending?'Pending registration / sign-in':'Registered')+'</p>'+accessControls(u)+'<button>Save permissions</button>')+'</form>').join(''));
+    d.querySelectorAll('form').forEach(f=>{
+      const role=f.querySelector('[name="role"]');if(!role)return;
+      role.onchange=()=>f.querySelectorAll('[name="permissions"]').forEach(c=>c.checked=role.value==='technician');
+      f.onsubmit=async e=>{
+        e.preventDefault();const button=f.querySelector('button');button.disabled=true;
+        try{const values=new FormData(f);const body={role:values.get('role'),permissions:values.getAll('permissions'),active:Number(values.get('active'))};
+          if(f.dataset.id)body.id=f.dataset.id;else body.email=values.get('email')||f.dataset.email;
+          await send('/api/admin/users',body);d.close();await showUsers();
+        }catch(error){d.querySelector('.settingsError').textContent=error.message}finally{button.disabled=false}
+      };
+    });
   }catch(error){byId('notice').textContent=error.message}
 }
