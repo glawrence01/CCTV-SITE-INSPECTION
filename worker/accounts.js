@@ -14,10 +14,10 @@ async function authCall(env,path,body,token){
   const data=await response.json();
   return {ok:response.ok,data};
 }
-const permissionKeys=['register_cameras','inspect','observations','manage_actions','manage_properties','view_reports'];
+const permissionKeys=['register_cameras','inspect','observations','manage_actions','manage_properties','view_reports','manage_incidents'];
 function permissionsFor(user){return user.role==='super_admin'?permissionKeys:user.permissions===null||user.permissions===undefined?(user.role==='technician'?permissionKeys:[]):JSON.parse(user.permissions)}
 function permitted(user,key){return permissionsFor(user).includes(key)}
-const recordPermission={register:'register_cameras',registerBatch:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions'};
+const recordPermission={register:'register_cameras',registerBatch:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions',incident:'manage_incidents'};
 async function identity(req,env){
   let token=cookie(req,'xh_access'),session;
   let result=token?await authCall(env,'/user',null,token):{ok:false};

@@ -1,7 +1,7 @@
 let account=null,properties=[],businessId='';
-const permissionLabels={register_cameras:'Register and edit cameras',inspect:'Submit camera and DVR inspections',observations:'Add observations',manage_actions:'Create and update action points',manage_properties:'Manage business name and properties',view_reports:'View full reports, remarks and history'};
+const permissionLabels={register_cameras:'Register and edit cameras',inspect:'Submit camera and DVR inspections',observations:'Add observations',manage_actions:'Create and update action points',manage_properties:'Manage business name and properties',view_reports:'View full reports, remarks and history',manage_incidents:'Record and review incidents'};
 const can=p=>account?.role==='super_admin'||account?.permissions?.includes(p);
-const permissionForKind={register:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions'};
+const permissionForKind={register:'register_cameras',camera:'inspect',recorder:'inspect',round:'inspect',note:'observations',action:'manage_actions',incident:'manage_incidents'};
 const byId=id=>document.getElementById(id);
 const safe=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 async function apiFetch(url,options={}){
@@ -61,7 +61,7 @@ function showOnboarding(){
   byId('onboard').onsubmit=async e=>{e.preventDefault();try{await send('/api/onboard',Object.fromEntries(new FormData(e.target)));await startAccount()}catch(error){byId('onboardError').textContent=error.message}};
 }
 async function loadBusiness(){
-  data=[];page='overview';Object.keys(filter).forEach(k=>filter[k]='');
+  data=[];page='overview';Object.keys(filter).forEach(k=>filter[k]='');filter.date=day();
   const r=await apiFetch('/api/properties');if(!r.ok)throw Error(await r.text());properties=await r.json();
   byId('accountScreen').hidden=true;document.querySelector('.layout').hidden=false;
   const business=account.businesses.find(b=>b.id===businessId);

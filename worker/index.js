@@ -1,7 +1,7 @@
 const assets=__ASSETS__;
 const common=['school','date','time','officer','shift'];
-const required={register:['school','camera','location','installation'],camera:[...common,'camera','location','recorder','live','playback','power','fault'],recorder:[...common,'recorder','power','storage','playback','monitor'],note:[...common,'observation'],action:[...common,'action','state']};
-const allowed={register:['recorder','remarks'],camera:['remarks'],recorder:['earliest','remarks'],note:['remarks'],action:['camera','recorder','owner','due','remarks']};
+const required={incident:['school','date','time','officer','recorder','camera','location','incidentTitle','description'],register:['school','camera','location','installation'],camera:[...common,'camera','location','recorder','live','playback','power','fault'],recorder:[...common,'recorder','power','storage','playback','monitor'],note:[...common,'observation'],action:[...common,'action','state']};
+const allowed={incident:['endTime','recorderTime','remarks'],register:['recorder','remarks'],camera:['remarks'],recorder:['earliest','remarks'],note:['remarks'],action:['camera','recorder','owner','due','remarks']};
 const reply=(body,status=200)=>new Response(body,{status,headers:{'Cache-Control':'no-store'}});
 async function registerCameras(db,payload,bid){
   const clean=v=>typeof v==='string'?v.trim():'';
@@ -44,6 +44,11 @@ let {id,kind,payload,update,version}=await req.json();if(kind==='registerBatch')
 if(!Object.hasOwn(required,kind)||!payload||typeof payload!=='object'||!/^[0-9a-f-]{36}$/i.test(id))return reply('Invalid record.',400);
 let body={};for(let k of [...required[kind],...allowed[kind]]){if(typeof payload[k]==='string')body[k]=payload[k].trim();if((body[k]?.length||0)>3000)return reply('Entry too long.',400)}
 if(required[kind].some(k=>!body[k])||(kind==='register'&&body.installation==='Installed'&&!body.recorder))return reply('Complete the required fields.',400);
+if(kind==='incident'){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(body.date)||!Number.isFinite(Date.parse(body.date))||new Date(body.date).toISOString().slice(0,10)!==body.date||!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.time))return reply('Enter a valid incident date and time.',400);
+  if(body.endTime&&(!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime)||body.endTime<body.time))return reply('End time must be on or after the start time on the same day.',400);
+  body.loggedAt=new Date().toISOString();
+}
 if(body.earliest&&body.earliest>body.date)return reply('Earliest recording must be on or before the inspection date.',400);
 if(update){if(!['action','register'].includes(kind))return reply('Inspection history is read only.',400);body.version=Number(version)+1;let result=await env.DB.prepare("UPDATE records SET payload=? WHERE id=? AND kind=? AND business_id=? AND coalesce(json_extract(payload,'$.version'),1)=?").bind(JSON.stringify(body),id,kind,bid,version).run();if(!result.meta.changes)return reply('This record changed. Close the form and refresh before editing.',409)}
 else{body.version=1;await env.DB.prepare('INSERT INTO records(id,kind,payload,business_id) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,kind,JSON.stringify(body),bid).run()}return reply('Saved')}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number is already registered on this DVR/NVR at this school.',409);return reply('Records are unavailable. Please try again.',503)}}

@@ -49,3 +49,15 @@ await status(await call('alice','/api/admin/users',{email:'pending@example.test'
 await status(await call('pending','/api/me'),403);
 await status(await call('alice','/api/admin/users',{id:'staff',role:'technician',active:1,permissions:['manage_users']}),400);
 console.log('PASS business ownership, legacy-owner isolation, scoped team lists, pending user binding, granular write/read permissions, anti-escalation, suspension/reactivation, CSRF, batch saves and cross-business record protection');
+// Incident history is tenant-scoped, permission-controlled and immutable.
+const incident={id:crypto.randomUUID(),kind:'incident',payload:{school:'School A',date:'2026-11-24',time:'14:30',endTime:'14:45',recorder:'DVR 1',camera:'1',location:'Entrance',officer:'Inspector',incidentTitle:'Gate incident',description:'Review visitor entry',recorderTime:'DVR clock is five minutes slow',remarks:'Preserve relevant footage'}};
+await status(await call('alice','/api/records',incident),200);
+await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID()}),403);
+assert.ok(!(await (await call('staff','/api/records')).json()).some(r=>r.kind==='incident'));
+assert.ok(!(await (await call('bob','/api/records')).json()).some(r=>r.kind==='incident'));
+await status(await call('alice','/api/admin/users',{id:'staff',role:'technician',active:1,permissions:['manage_incidents']}),200);
+assert.equal((await (await call('staff','/api/records')).json()).find(r=>r.kind==='incident').recorderTime,incident.payload.recorderTime);
+await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID(),payload:{...incident.payload,endTime:'14:00'}}),400);
+await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID(),payload:{...incident.payload,date:'2026-02-30'}}),400);
+await status(await call('staff','/api/records',{...incident,update:true,version:1}),400);
+console.log('PASS incident persistence, timestamp validation, permission checks and tenant isolation');
