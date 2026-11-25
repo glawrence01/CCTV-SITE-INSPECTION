@@ -18,3 +18,6 @@
 
 .replacement-options { display: flex; flex-wrap: wrap; gap: .75rem 1.25rem; }
 .replacement-options .permission-option { margin: .25rem 0; }
+
+#recorderPrompt { display: block; margin-top: .35rem; }
+#recorderPrompt:empty { display: none; }

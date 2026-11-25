@@ -87,7 +87,7 @@ function makeDailyPdf(rows, title, scope, date, inventory, actions) {
     if (action.remarks) paragraph(action.remarks);
   }
   const recorders = new Map(rows.filter(row => row.kind === 'recorder').map(row=>[key(row.school,row.recorder),row]));
-  const devices = latestSummaryDevices(rows, inventory);
+  const devices = latestSummaryDevices(rows, [...inventory,...scopedRecorderCatalog()]);
   y += 23;
   paragraph('Latest DVR/NVR updates', true);
   if (!devices.length) paragraph('No DVR/NVRs found for this selection.');

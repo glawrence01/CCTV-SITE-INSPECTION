@@ -34,9 +34,9 @@ async function registerCameras(db,payload,bid){
   await db.prepare("INSERT INTO records(id,kind,payload,business_id) SELECT json_extract(value,'$.id'),'register',json_extract(value,'$.body'),? FROM json_each(?)").bind(bid,encoded).run();
   return reply('Saved');
 }
-async function recordRoutes(req,env,user){const bid=user.business_id;try{if(req.method==='GET'){let {results}=await env.DB.prepare('SELECT id,kind,payload,rowid FROM records WHERE business_id=? ORDER BY rowid DESC').bind(bid).all();return Response.json(results.map(r=>{let p=JSON.parse(r.payload);return {...p,id:r.id,kind:r.kind,version:p.version||1}}),{headers:{'Cache-Control':'no-store'}})}
+async function recordRoutes(req,env,user,input){const bid=user.business_id;try{if(req.method==='GET'){let {results}=await env.DB.prepare('SELECT id,kind,payload,rowid FROM records WHERE business_id=? ORDER BY rowid DESC').bind(bid).all();return Response.json(results.map(r=>{let p=JSON.parse(r.payload);return {...p,id:r.id,kind:r.kind,version:p.version||1}}),{headers:{'Cache-Control':'no-store'}})}
 if(req.method!=='POST')return reply('Unsupported method',405);
-let {id,kind,payload,update,version}=await req.json();
+const {id,kind,payload,update,version}=input;
 if(kind==='registerBatch'){
   if(update)return reply('Invalid camera registration.',400);
   return await registerCameras(env.DB,payload,bid);

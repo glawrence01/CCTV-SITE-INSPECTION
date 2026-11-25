@@ -26,7 +26,20 @@ const day=(offset=0)=>{
 function localDate(d){return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
 function matches(r,withDate=true){return Object.entries(filter).every(([k,v])=>!v||(!withDate&&k==='date')||r[k]===v)}
 function latest(list,keys){let m=new Map();for(let r of list){let k=key(...keys.map(f=>r[f]));if(!m.has(k))m.set(k,r)}return [...m.values()]}
-function renderFilters(){if(page==='overview'&&!filter.date)filter.date=day();let items=['school','recorder','camera'];$('filters').innerHTML=items.map(k=>'<label>'+icon(k==='school'?'school':k)+'<select aria-label="Filter by '+k+'" data-filter="'+k+'"><option value="">All '+({school:'properties',camera:'cameras',recorder:'recorders'}[k])+'</option>'+[...new Set(data.filter(r=>(k==='school'||!filter.school||r.school===filter.school)&&(k!=='camera'||!filter.recorder||r.recorder===filter.recorder)).map(r=>r[k]).filter(Boolean))].sort().map(v=>'<option '+(filter[k]===v?'selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>').join('')+(page==='register'?'':'<label>'+icon('date')+'<input aria-label="Filter record date" type="date" data-filter="date" value="'+filter.date+'"></label>')+(page==='incident'?incidentSearchForm('incidentSearchForm','Search within selected filters'):'')+((Object.values(filter).some(Boolean)||incidentQuery)?'<button id="reset">Clear filters</button>':'');$('filters').querySelectorAll('[data-filter]').forEach(e=>e.onchange=()=>{filter[e.dataset.filter]=e.value;if(e.dataset.filter==='school'){filter.camera='';filter.recorder=''}if(e.dataset.filter==='recorder')filter.camera='';render()});if(page==='incident')bindIncidentSearch('incidentSearchForm',false);if($('reset'))$('reset').onclick=()=>{for(let k in filter)filter[k]='';incidentQuery='';render()}}
+let recorders=[];
+function recordersFor(school){
+  return recorders.filter(device=>!school||device.school===school);
+}
+function filterValues(field){
+  if(field==='school')return typeof properties==='undefined'?[]:properties.map(p=>p.name);
+  if(field==='recorder')return [...new Set(recordersFor(filter.school).map(device=>device.name))].sort();
+  return [...new Set(data.filter(row=>(!filter.school||row.school===filter.school)&&(!filter.recorder||row.recorder===filter.recorder)).map(row=>row.camera).filter(Boolean))].sort();
+}
+function scopedRecorderCatalog(){
+  return recordersFor(filter.school).filter(device=>!filter.recorder||device.name===filter.recorder)
+    .map(device=>({school:device.school,recorder:device.name}));
+}
+function renderFilters(){if(page==='overview'&&!filter.date)filter.date=day();let items=['school','recorder','camera'];$('filters').innerHTML=items.map(k=>'<label>'+icon(k==='school'?'school':k)+'<select aria-label="Filter by '+k+'" data-filter="'+k+'"><option value="">All '+({school:'properties',camera:'cameras',recorder:'recorders'}[k])+'</option>'+filterValues(k).map(v=>'<option '+(filter[k]===v?'selected':'')+'>'+esc(v)+'</option>').join('')+'</select></label>').join('')+(page==='register'?'':'<label>'+icon('date')+'<input aria-label="Filter record date" type="date" data-filter="date" value="'+filter.date+'"></label>')+(page==='incident'?incidentSearchForm('incidentSearchForm','Search within selected filters'):'')+((Object.values(filter).some(Boolean)||incidentQuery)?'<button id="reset">Clear filters</button>':'');$('filters').querySelectorAll('[data-filter]').forEach(e=>e.onchange=()=>{filter[e.dataset.filter]=e.value;if(e.dataset.filter==='school'){filter.camera='';filter.recorder=''}if(e.dataset.filter==='recorder')filter.camera='';render()});if(page==='incident')bindIncidentSearch('incidentSearchForm',false);if($('reset'))$('reset').onclick=()=>{for(let k in filter)filter[k]='';incidentQuery='';render()}}
 let incidentQuery='';
 function incidentSearchForm(id,label){return '<form id="'+id+'" class="incident-search"><label>'+label+'<input name="query" aria-label="Search incidents" type="search" placeholder="Title, date, property, DVR, camera or details" value="'+esc(incidentQuery)+'"></label><button type="submit" class="primary">Search</button></form>'}
 function bindIncidentSearch(id,allDates){const form=$(id);if(form)form.onsubmit=e=>{e.preventDefault();incidentQuery=form.elements.query.value.trim();if(allDates)filter.date='';page='incident';render()}}
@@ -132,7 +145,7 @@ const snapshots=latestDeviceChecks(data,filter),inventory=data.filter(r=>r.kind=
 const cams=snapshots.filter(r=>r.kind==='camera'),rec=snapshots.filter(r=>r.kind==='recorder');
 const {working,faults}=summarizeCameras(cams,inventory),failed=faults.length;
 const actions=actionPointsForDay(data,filter),checks=snapshots.filter(r=>!['Unchecked','Empty port','Not checked'].includes(r.channelStatus||r.live));
-const devices=latestSummaryDevices(snapshots,inventory);
+const devices=latestSummaryDevices(snapshots,[...inventory,...scopedRecorderCatalog()]);
 let exceptions=[['camera','Locations with no view',cams.filter(r=>r.live==='No view')],['cable','Camera or cable replacements',cams.filter(r=>['Camera','Cable','Camera and cable'].includes(r.fault))],['register','Cameras not installed',data.filter(r=>r.kind==='register'&&matches(r,false)&&r.installation==='Not installed')],['display','Faulty TVs / monitors',rec.filter(r=>r.monitor==='Faulty')]];
 let end=filter.date||day(),dates=Array.from({length:7},(_,i)=>{let d=new Date(end+'T12:00:00');d.setDate(d.getDate()-6+i);return localDate(d)}),counts=dates.map(d=>data.filter(r=>matches(r,false)&&r.date===d&&['camera','recorder'].includes(r.kind)&&(!r.channelStatus||!['Unchecked','Empty port'].includes(r.channelStatus))).length),max=Math.max(1,...counts);
 let trend='<div class="chart" role="img" aria-label="'+dates.map((d,i)=>d+' '+counts[i]+' checks').join(', ')+'">'+counts.map((n,i)=>'<div class="bar" style="height:'+100*n/max+'%" title="'+dates[i]+': '+n+' checks"></div>').join('')+'</div><div class="axis">'+dates.map(d=>'<span>'+d.slice(8)+'</span>').join('')+'</div><div class="legend">Completed checks · '+esc(dates[0])+' to '+esc(end)+'</div>';
@@ -159,11 +172,7 @@ function registerRows(base){
     row.querySelector('button').onclick=()=>{row.remove();if(!list.children.length)add(true);sync()};
     list.append(row);sync();if(focus)row.querySelector('[data-location]').focus();
   }
-  form.school.oninput=()=>{
-    const names=[...new Set(data.filter(r=>key(r.school)===key(form.school.value)).map(r=>r.recorder).filter(Boolean))];
-    $('list-recorder').innerHTML=names.map(v=>'<option value="'+esc(v)+'">').join('');
-  };
-  form.school.oninput();$('addCamera').onclick=()=>add(true);
+  $('addCamera').onclick=()=>add(true);
   $('fill32').onclick=()=>{while(list.children.length<32)add(false)};
   add(false);
 }
@@ -181,17 +190,64 @@ function inspectionFormValues(){
   if(['round','recorder'].includes(kind))values.replacements=form.getAll('replacements').join(', ');
   return values;
 }
-function drawFields(r={}){let read=!!edit&&(!can(permissionForKind[kind])||(account?.role!=='technician'&&!['action','register'].includes(kind)));let base={school:filter.school,date:filter.date||day(),time:new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Lagos',hour:'2-digit',minute:'2-digit'}).format(new Date()),state:'Open',...r};const bulk=kind==='register'&&!edit;$('save').textContent='Save record';$('save').disabled=false;let html=(bulk?['school','recorder']:fields[kind]).map(f=>{if(f==='replacements')return '<fieldset class="wide replacement-options"><legend>Replacement required</legend>'+['Camera','Power pack','HDD'].map(part=>'<label class="permission-option"><input type="checkbox" name="replacements" value="'+part+'" '+(String(base.replacements||'').split(', ').includes(part)?'checked ':'')+(read?'disabled ':'')+'>'+part+'</label>').join('')+'</fieldset>';
+function drawFields(r={}){let read=!!edit&&(!can(permissionForKind[kind])||(account?.role!=='technician'&&!['action','register'].includes(kind)));let base={school:filter.school||(properties.length===1?properties[0].name:''),date:filter.date||day(),time:new Intl.DateTimeFormat('en-GB',{timeZone:'Africa/Lagos',hour:'2-digit',minute:'2-digit'}).format(new Date()),state:'Open',...r};const bulk=kind==='register'&&!edit;$('save').textContent='Save record';$('save').disabled=false;let html=(bulk?['school','recorder']:fields[kind]).map(f=>{if(f==='replacements')return '<fieldset class="wide replacement-options"><legend>Replacement required</legend>'+['Camera','Power pack','HDD'].map(part=>'<label class="permission-option"><input type="checkbox" name="replacements" value="'+part+'" '+(String(base.replacements||'').split(', ').includes(part)?'checked ':'')+(read?'disabled ':'')+'>'+part+'</label>').join('')+'</fieldset>';
+if(f==='recorder')return '<label>'+names.recorder+'<select name="recorder" '+(read?'disabled':'')+'></select><span id="recorderPrompt"></span></label>';
 if(f==='owner'){
   const legacy=base.owner&&!actionRecipients(base.owner).length;
   return '<label class="wide">'+names.owner+'<input type="email" multiple name="owner" maxlength="1000" placeholder="name@example.com, another@example.com" value="'+esc(legacy?'':base.owner||'')+'" '+(read?'disabled':'')+'><small>'+(legacy?'Previous assignee: '+esc(base.owner)+'. ':'')+'Separate multiple addresses with commas.</small></label>';
 }
-let v=base[f]||'',req=!(kind==='round'&&systemFields.includes(f))&&!optional.includes(f)&&!(kind==='action'&&['camera','recorder'].includes(f))&&!(kind==='register'&&f==='recorder'&&base.installation==='Not installed');let attr=' name="'+f+'" '+(req?'required ':'')+(read?'disabled ':'')+(f==='date'&&account?.role==='technician'?'max="'+day()+'" '+(edit?'readonly ':''):'');let input=f==='school'?'<select'+attr+'>'+options(properties.map(p=>p.name),v)+'</select>':choices[f]?'<select'+attr+'>'+options(choices[f],v)+'</select>':['remarks','observation','action','description','recorderTime'].includes(f)?'<textarea maxlength="3000"'+attr+'>'+esc(v)+'</textarea>':'<input'+attr+' maxlength="200" list="list-'+f+'" type="'+(['earliest','due','date'].includes(f)?'date':['time','endTime'].includes(f)?'time':'text')+'" value="'+esc(v)+'">';let hints=[...new Set(data.filter(x=>f==='school'||!base.school||x.school===base.school).map(x=>x[f]).filter(Boolean))];return '<label class="'+(['remarks','observation','action','description','recorderTime'].includes(f)?'wide':'')+'">'+(kind==='incident'&&f==='date'?'Incident date':kind==='incident'&&f==='time'?'Incident start time (local)':names[f])+input+(choices[f]?'':'<datalist id="list-'+f+'">'+hints.map(v=>'<option value="'+esc(v)+'">').join('')+'</datalist>')+'</label>'}).join('');$('fields').innerHTML=(kind==='incident'?'<p>Use the incident’s local time. If the DVR clock differs, enter the displayed playback time in DVR clock notes. This log does not save video footage.</p>':'')+(!edit?'<label style="margin-bottom:16px">Record type<select id="type">'+['round',...Object.keys(fields).filter(k=>k!=='round')].filter(k=>can(permissionForKind[k])).map(k=>'<option value="'+k+'" '+(k===kind?'selected':'')+'>'+pages[k]+'</option>').join('')+'</select></label>':'')+'<div class="fields">'+html+'</div>';$('save').hidden=read;$('save').style.display=read?'none':'';$('cancel').textContent=read?'Close':'Cancel';if($('type'))$('type').onchange=e=>{let prev=inspectionFormValues();kind=e.target.value;$('formTitle').textContent=titles[kind];drawFields(prev)};let f=$('form').elements;if(kind==='round')drawChannels(base,read);if(bulk)registerRows(base);else if(kind==='register')f.installation.onchange=()=>f.recorder.required=f.installation.value!=='Not installed';if(f.date&&!read&&account?.role==='technician'){f.date.addEventListener('input',updateDateControls);updateDateControls()}if(['camera','incident'].includes(kind)&&!read){const fill=(replaceLocation=true)=>{
-  const registered=data.filter(x=>x.kind==='register'&&key(x.school,x.recorder)===key(f.school.value,f.recorder.value));
-  $('list-camera').innerHTML=registered.map(x=>'<option value="'+esc(x.camera)+'">'+esc(x.location)+'</option>').join('');
-  const match=registered.find(x=>key(x.camera)===key(f.camera.value));
-  if(replaceLocation)f.location.value=match?.location||'';
-};f.camera.onchange=fill;f.school.onchange=fill;f.recorder.onchange=fill;fill(!edit)}}
+let v=base[f]||'',req=!(kind==='round'&&systemFields.includes(f))&&!optional.includes(f)&&!(kind==='action'&&['camera','recorder'].includes(f))&&!(kind==='register'&&f==='recorder'&&base.installation==='Not installed');let attr=' name="'+f+'" '+(req?'required ':'')+(read?'disabled ':'')+(f==='date'&&account?.role==='technician'?'max="'+day()+'" '+(edit?'readonly ':''):'');let input=f==='school'?'<select'+attr+'>'+options(properties.map(p=>p.name),v)+'</select>':choices[f]?'<select'+attr+'>'+options(choices[f],v)+'</select>':['remarks','observation','action','description','recorderTime'].includes(f)?'<textarea maxlength="3000"'+attr+'>'+esc(v)+'</textarea>':'<input'+attr+' maxlength="200" list="list-'+f+'" type="'+(['earliest','due','date'].includes(f)?'date':['time','endTime'].includes(f)?'time':'text')+'" value="'+esc(v)+'">';let hints=[...new Set(data.filter(x=>f==='school'||!base.school||x.school===base.school).map(x=>x[f]).filter(Boolean))];return '<label class="'+(['remarks','observation','action','description','recorderTime'].includes(f)?'wide':'')+'">'+(kind==='incident'&&f==='date'?'Incident date':kind==='incident'&&f==='time'?'Incident start time (local)':names[f])+input+(choices[f]?'':'<datalist id="list-'+f+'">'+hints.map(v=>'<option value="'+esc(v)+'">').join('')+'</datalist>')+'</label>'}).join('');$('fields').innerHTML=(kind==='incident'?'<p>Use the incident’s local time. If the DVR clock differs, enter the displayed playback time in DVR clock notes. This log does not save video footage.</p>':'')+(!edit?'<label style="margin-bottom:16px">Record type<select id="type">'+['round',...Object.keys(fields).filter(k=>k!=='round')].filter(k=>can(permissionForKind[k])).map(k=>'<option value="'+k+'" '+(k===kind?'selected':'')+'>'+pages[k]+'</option>').join('')+'</select></label>':'')+'<div class="fields">'+html+'</div>';$('save').hidden=read;$('save').style.display=read?'none':'';$('cancel').textContent=read?'Close':'Cancel';if($('type'))$('type').onchange=e=>{let prev=inspectionFormValues();kind=e.target.value;$('formTitle').textContent=titles[kind];drawFields(prev)};let f=$('form').elements;
+const paintChannels=kind==='round'?drawChannels(base,read):null;
+if(bulk)registerRows(base);
+if(f.recorder)bindRecorderPicker(base,read,paintChannels);
+if(f.date&&!read&&account?.role==='technician'){
+  f.date.addEventListener('input',updateDateControls);
+  updateDateControls();
+}
+}
+function bindRecorderPicker(base,read,paintChannels){
+  const form=$('form').elements;
+  const select=form.recorder;
+  const prompt=$('recorderPrompt');
+  function fillCamera(clear){
+    if(!['camera','incident'].includes(kind)||read)return;
+    const registered=data.filter(row=>row.kind==='register'&&key(row.school,row.recorder)===key(form.school.value,select.value));
+    $('list-camera').innerHTML=registered.map(row=>'<option value="'+esc(row.camera)+'">'+esc(row.location)+'</option>').join('');
+    if(clear){form.camera.value='';form.location.value='';}
+  }
+  function picker(value,clear){
+    const school=form.school.value;
+    const devices=school?recordersFor(school):[];
+    const names=devices.map(device=>device.name);
+    const desired=names.find(name=>key(name)===key(value))||(read?value:'')||(names.length===1?names[0]:'');
+    if(read&&desired&&!names.includes(desired))names.push(desired);
+    select.innerHTML=options(names,desired);
+    select.required=kind!=='action'&&!(kind==='register'&&form.installation?.value==='Not installed');
+    prompt.replaceChildren();
+    if(!read&&!school)prompt.textContent='Choose a property to see its registered recorders.';
+    if(!read&&school&&!devices.length){
+      if(canRegisterRecorder()){
+        const button=document.createElement('button');
+        button.type='button';
+        button.textContent='Register a DVR/NVR for this property';
+        button.onclick=()=>showRecorderRegister(school,device=>{picker(device.name,true);select.focus()});
+        prompt.append(button);
+      }else{
+        prompt.textContent='No DVR/NVR is registered. Ask your administrator or camera registrar to add one for this property.';
+      }
+    }
+    if(paintChannels)paintChannels(clear);
+    fillCamera(clear);
+  }
+  select.addEventListener('change',()=>{if(paintChannels)paintChannels(true);fillCamera(true)});
+  form.school.addEventListener('change',()=>picker('',true));
+  if(form.installation)form.installation.addEventListener('change',()=>picker(select.value,false));
+  if(form.camera&&['camera','incident'].includes(kind))form.camera.addEventListener('change',()=>{
+    const match=data.find(row=>row.kind==='register'&&key(row.school,row.recorder,row.camera)===key(form.school.value,select.value,form.camera.value));
+    if(match)form.location.value=match.location;
+  });
+  picker(base.recorder,false);
+}
 function updateDateControls(){
   const date=$('form').elements.date?.value;
   const previous=$('dateRestriction');
@@ -220,7 +276,10 @@ function openForm(r){
   $('modal').showModal();
 }
 $('new').onclick=()=>openForm();$('close').onclick=$('cancel').onclick=()=>$('modal').close();
-async function refresh(){let res=await apiFetch('/api/records',{cache:'no-store'});if(!res.ok)throw Error('Could not load the inspection records. Refresh to retry.');data=(await res.json()).flatMap(expandRound);data.sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));render()}
+async function refresh(){let res=await apiFetch('/api/records',{cache:'no-store'});if(!res.ok)throw Error('Could not load the inspection records. Refresh to retry.');data=(await res.json()).flatMap(row=>{
+  const owner=recordersFor(row.school).find(device=>key(device.name)===key(row.recorder));
+  return expandRound(owner?{...row,recorder:owner.name}:row);
+});data.sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')));render()}
 $('form').onsubmit=async e=>{e.preventDefault();if(saving)return;saving=true;$('save').disabled=true;try{const recordId=edit?.id||draftId;let payload=inspectionFormValues();if(kind==='register'&&!edit)payload.rows=readRegisterRows(payload);if(kind==='round'){
 payload.channels=snapshotChannels(payload);
 if(payload.channels.every(c=>c.status==='Unchecked')&&!systemFields.some(field=>payload[field]&&payload[field]!=='Not checked'))throw Error('Record a system check or mark at least one channel before saving.');
@@ -246,16 +305,20 @@ function snapshotChannels(form){
     const channel=index+1;
     const matches=data.filter(r=>r.kind==='register'&&key(r.school,r.recorder)===key(form.school,form.recorder)&&/^(?:(?:cam(?:era)?|ch(?:annel)?)[ -]*)?0*\d+$/i.test(r.camera)&&Number(r.camera.match(/\d+$/)[0])===channel);
     const match=matches.length===1?matches[0]:null;
-    return {status,camera:edit?.channels?.[index]?.camera||match?.camera||'CH '+channel,location:edit?.channels?.[index]?.location??match?.location??''};
+    const previous=edit&&key(edit.school,edit.recorder)===key(form.school,form.recorder)?edit.channels?.[index]:null;
+    return {status,camera:previous?.camera||match?.camera||'CH '+channel,location:previous?.location??match?.location??''};
   });
 }
 function drawChannels(base,read){
   if(read||!channelDraft)channelDraft={count:base.channels?.length||32,mode:'Working',values:Array.from({length:128},(_,i)=>base.channels?.[i]?.status||'Unchecked')};
   const draft=channelDraft, area=document.createElement('section');
   area.className='channel-panel';$('fields').append(area);
-  function paint(){
-    const counts=statuses.map(s=>[s,draft.values.slice(0,draft.count).filter(v=>v===s).length]).filter(([,n])=>n);
+  function paint(reset=false){
     const form=$('form').elements;
+    if(reset){draft.count=32;draft.values.fill('Unchecked');}
+    if(!read&&!form.recorder.value){area.hidden=true;return;}
+    area.hidden=false;
+    const counts=statuses.map(s=>[s,draft.values.slice(0,draft.count).filter(v=>v===s).length]).filter(([,n])=>n);
     const channels=read?base.channels:snapshotChannels({school:form.school.value,recorder:form.recorder.value});
     const badge=s=>'<span class="dot st'+statuses.indexOf(s)+'"></span>'+esc(s);
     area.innerHTML='<h3>DVR channels</h3>'+(read?'':'<p>Choose a status, then tap each matching channel. Use “Mark all working” when every channel or most channels have a picture.</p><div class="channel-tools"><label>Number of channels<input id="capacity" type="number" min="1" max="128" required value="'+draft.count+'"></label><button type="button" id="allWorking">Mark all working</button></div><div class="palette">'+statuses.map(s=>'<button type="button" data-mode="'+s+'" aria-pressed="'+(s===draft.mode)+'">'+badge(s)+'</button>').join('')+'</div>')+'<div class="channels">'+draft.values.slice(0,draft.count).map((s,i)=>'<button type="button" class="ch st'+statuses.indexOf(s)+'" '+(read?'disabled':'')+' data-channel="'+i+'" aria-label="Channel '+(i+1)+', '+s+'" title="'+s+'">'+String(i+1).padStart(2,'0')+(channels[i]?.location?'<small>'+esc(channels[i].location)+'</small>':'')+'</button>').join('')+'</div><div class="channel-summary">'+counts.map(([s,n])=>'<span>'+badge(s)+' <b>'+n+'</b></span>').join('')+'</div>';
@@ -265,12 +328,7 @@ function drawChannels(base,read){
     area.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{draft.mode=b.dataset.mode;paint()});
     area.querySelectorAll('[data-channel]').forEach(b=>b.onclick=()=>{draft.values[Number(b.dataset.channel)]=draft.mode;paint()});
   }
-  if(!read){
-    const f=$('form').elements;
-    f.school.onchange=paint;
-    f.recorder.onchange=paint;
-  }
-  paint();
+  return paint;
 }
 let draftId=crypto.randomUUID();$('modal').addEventListener('close',()=>draftId=crypto.randomUUID());startAccount();
 

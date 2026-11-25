@@ -107,16 +107,38 @@ async function accountRoutes(req,env,user,url){
     await env.DB.prepare('INSERT INTO properties(id,business_id,name,type) VALUES(?,?,?,?)').bind(crypto.randomUUID(),bid,body.name.trim(),body.type).run();
     return jsonResponse({saved:true});
   }
+  if(path==='/api/recorders'){
+    if(req.method==='GET'){
+      const rows=await env.DB.prepare('SELECT d.id,d.name,d.type,d.property_id,p.name AS school FROM property_recorders d JOIN properties p ON p.id=d.property_id WHERE p.business_id=? ORDER BY p.name,d.name').bind(bid).all();
+      return jsonResponse(rows.results);
+    }
+    if(!permitted(user,'manage_properties')&&!permitted(user,'register_cameras'))return reply('Recorder registration permission required.',403);
+    const {property_id,name,type}=await req.json();
+    if(typeof property_id!=='string'||typeof name!=='string'||!name.trim()||name.trim().length>200||!['DVR','NVR'].includes(type))return reply('Select a property, name and recorder type.',400);
+    const property=await env.DB.prepare('SELECT id,name FROM properties WHERE id=? AND business_id=?').bind(property_id,bid).first();
+    if(!property)return reply('Property not found in this business.',404);
+    const recorder={id:crypto.randomUUID(),property_id,name:name.trim(),type,school:property.name};
+    const result=await env.DB.prepare('INSERT INTO property_recorders(id,property_id,name,type) VALUES(?,?,?,?) ON CONFLICT(property_id,name) DO NOTHING').bind(recorder.id,recorder.property_id,recorder.name,type).run();
+    return result.meta.changes?jsonResponse(recorder,201):reply('A recorder with that name is already registered for this property.',409);
+  }
   if(path==='/api/date-requests')return dateRequestRoutes(req,env.DB,user);
   if(path==='/api/records'){
-    
+    let body;
     if(req.method==='POST'){
-      const body=await req.clone().json();
+      body=await req.json();
       if(!permitted(user,recordPermission[body.kind]))return reply('You do not have permission for this action.',403);
       const property=await env.DB.prepare('SELECT id FROM properties WHERE business_id=? AND name=?').bind(bid,body.payload?.school||'').first();
       if(!property)return reply('Create or select a property first.',400);
+      const supplied=body.payload?.recorder;
+      const needsRecorder=['round','recorder','camera','incident','registerBatch'].includes(body.kind)||(body.kind==='register'&&body.payload.installation==='Installed');
+      if(needsRecorder||supplied){
+        if(typeof supplied!=='string'||!supplied.trim())return reply('Select a registered DVR/NVR for this property.',400);
+        const recorder=await env.DB.prepare('SELECT name FROM property_recorders WHERE property_id=? AND name=?').bind(property.id,supplied.trim()).first();
+        if(!recorder)return reply('Select or register a DVR/NVR for this property.',400);
+        body.payload.recorder=recorder.name;
+      }
     }
-    const response=await recordRoutes(req,env,user);
+    const response=await recordRoutes(req,env,user,body);
     if(req.method==='GET'&&!permitted(user,'view_reports')&&response.ok){
       const rows=await response.json();
       const fields=['id','kind','school','date','time','camera','location','recorder','installation','live','playback','power','storage','monitor','fault','channels','dateAccuracy','timeAccuracy','earliest','replacements'];

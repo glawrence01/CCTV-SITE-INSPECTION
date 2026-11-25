@@ -77,3 +77,15 @@ const latestChecks=latestDeviceChecks(records,{date:day()});
 `,context);
 assert.deepEqual(Array.from(vm.runInContext('latestChecks.map(row=>row.id)',context)),['new-a','new-b','new-a-1','new-b-1']);
 assert.equal(vm.runInContext('summarizeCameras(latestChecks,[]).faults.length',context),1);
+
+vm.runInContext(`
+recorders=[
+  {school:'School A',name:'Front entrance',type:'NVR'},
+  {school:'School A',name:'Rear entrance',type:'DVR'},
+  {school:'School B',name:'Other recorder',type:'DVR'}
+];
+filter.school='School A';
+`,context);
+assert.deepEqual(Array.from(vm.runInContext("filterValues('recorder')",context)),['Front entrance','Rear entrance']);
+assert.equal(vm.runInContext("recordersFor('School C').length",context),0);
+assert.equal(vm.runInContext("latestSummaryDevices([],scopedRecorderCatalog()).length",context),2);

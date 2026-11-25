@@ -76,14 +76,16 @@ function showOnboarding(){
 async function loadBusiness(){
   data=[];page='overview';Object.keys(filter).forEach(k=>filter[k]='');filter.date=day();
   const r=await apiFetch('/api/properties');if(!r.ok)throw Error(await r.text());properties=await r.json();
+  const catalog=await apiFetch('/api/recorders');if(!catalog.ok)throw Error(await catalog.text());recorders=await catalog.json();
   byId('accountScreen').hidden=true;document.querySelector('.layout').hidden=false;
   const business=account.businesses.find(b=>b.id===businessId);
   document.querySelector('.workspace').textContent=business.name;
   document.querySelector('.kicker').textContent=business.name;
   document.querySelector('.secure').textContent=account.role.replace('_',' ');
-  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.platform_owner?'<button id="ownerButton">Owner Console</button>':'')+(hasDateRequests()?'<button id="dateRequestsButton">Date permissions</button>':'')+'<button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
+  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.platform_owner?'<button id="ownerButton">Owner Console</button>':'')+(hasDateRequests()?'<button id="dateRequestsButton">Date permissions</button>':'')+'<button id="recordersButton">DVR/NVR register</button><button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
   if(byId('ownerButton'))byId('ownerButton').onclick=()=>showOwnerConsole();
   if(byId('dateRequestsButton'))byId('dateRequestsButton').onclick=()=>showDateRequests();
+  byId('recordersButton').onclick=()=>showRecorderRegister(filter.school);
   byId('settingsButton').onclick=()=>showSettings();
   byId('logoutButton').onclick=async()=>{await send('/api/auth/logout',{});account=null;data=[];showAuth()};
   await loadDateRequests();
@@ -175,4 +177,45 @@ async function showDateRequests(selectedDate=''){
     }
   }
   try{await loadDateRequests();paint()}catch(err){error.textContent=err.message}
+}
+
+function canRegisterRecorder(){
+  return can('manage_properties')||can('register_cameras');
+}
+function showRecorderRegister(school='',onSaved){
+  const property=properties.find(p=>p.name===school);
+  const list=properties.map(p=>{
+    const devices=recordersFor(p.name);
+    return '<section class="date-request"><strong>'+safe(p.name)+'</strong><p>'+
+      (devices.length?devices.map(d=>safe(d.name)+' ('+safe(d.type)+')').join(' · '):'No DVR/NVR registered.')+'</p></section>';
+  }).join('');
+  const propertyOptions='<option value="">Select…</option>'+properties.map(p=>
+    '<option value="'+safe(p.id)+'" '+(p.id===property?.id?'selected':'')+'>'+safe(p.name)+'</option>').join('');
+  const form=canRegisterRecorder()&&properties.length
+    ?'<form><label>Property<select name="property_id" required>'+propertyOptions+'</select></label><label>Recorder name<input name="name" maxlength="200" required placeholder="e.g. Main entrance NVR"></label><label>Type<select name="type"><option>DVR</option><option>NVR</option></select></label><button class="primary">Register DVR/NVR</button></form>'
+    :'';
+  const message=properties.length?'':'<p>Add a property in <strong>Settings → Business & properties</strong> before registering a recorder.</p>';
+  const d=settingsDialog('DVR/NVR register',message+form+list);
+  const registration=d.querySelector('form');
+  if(!registration)return;
+  const select=registration.elements.property_id;
+  if(property&&onSaved)select.disabled=true;
+  registration.onsubmit=async event=>{
+    event.preventDefault();
+    const button=registration.querySelector('button');
+    button.disabled=true;
+    try{
+      const values=Object.fromEntries(new FormData(registration));
+      values.property_id=select.value;
+      const device=await send('/api/recorders',values);
+      recorders.push(device);
+      d.close();
+      render();
+      if(onSaved)onSaved(device);
+      else showRecorderRegister(device.school);
+    }catch(error){
+      d.querySelector('.settingsError').textContent=error.message;
+      button.disabled=false;
+    }
+  };
 }
