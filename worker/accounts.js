@@ -107,6 +107,7 @@ async function accountRoutes(req,env,user,url){
     await env.DB.prepare('INSERT INTO properties(id,business_id,name,type) VALUES(?,?,?,?)').bind(crypto.randomUUID(),bid,body.name.trim(),body.type).run();
     return jsonResponse({saved:true});
   }
+  if(path==='/api/date-requests')return dateRequestRoutes(req,env.DB,user);
   if(path==='/api/records'){
     
     if(req.method==='POST'){
@@ -115,7 +116,7 @@ async function accountRoutes(req,env,user,url){
       const property=await env.DB.prepare('SELECT id FROM properties WHERE business_id=? AND name=?').bind(bid,body.payload?.school||'').first();
       if(!property)return reply('Create or select a property first.',400);
     }
-    const response=await recordRoutes(req,env,bid);
+    const response=await recordRoutes(req,env,user);
     if(req.method==='GET'&&!permitted(user,'view_reports')&&response.ok){
       const rows=await response.json();
       const fields=['id','kind','school','date','time','camera','location','recorder','installation','live','playback','power','storage','monitor','fault','channels'];

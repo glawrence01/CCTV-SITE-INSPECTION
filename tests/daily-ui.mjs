@@ -11,6 +11,10 @@ assert.ok(el('view').innerHTML.includes('No inspections recorded for this date')
 assert.ok(!el('view').innerHTML.includes('YESTERDAY_ONLY'));
 vm.runInContext('filter.date=day(-1);render()',context);
 assert.ok(el('view').innerHTML.includes('YESTERDAY_ONLY'));
+assert.ok(el('view').innerHTML.includes('Share daily PDF'));
+assert.ok(!el('view').innerHTML.includes('Camera status for this day'));
+assert.ok(!el('view').innerHTML.includes('Recorder status for this day'));
+
 vm.runInContext(`page='incident';filter.date='';data=[{id:'one',kind:'incident',date:'2026-01-01',time:'12:00',incidentTitle:'Gate incident',description:'Visitor entry'},{id:'two',kind:'incident',date:'2026-02-01',time:'13:00',incidentTitle:'Store incident',description:'Broken glass'}];incidentQuery='visitor';render()`,context);
 assert.ok(el('view').innerHTML.includes('Gate incident'));
 assert.ok(!el('view').innerHTML.includes('Store incident'));

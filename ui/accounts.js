@@ -14,17 +14,29 @@ async function send(url,body){
   if(!r.ok)throw Error(await r.text());
   return r.json();
 }
-function authField(label,name,type='text'){
-  return '<label>'+label+'<input name="'+name+'" type="'+type+'" required '+(type==='password'?'minlength="10" autocomplete="new-password"':'')+'></label>';
+function authField(label,name,type='text',current=false){
+  const input = '<input name="'+name+'" type="'+type+'" required '+(type==='password'?(current?'autocomplete="current-password"':'minlength="10" autocomplete="new-password"'):'')+'>';
+  if(type!=='password')return '<label>'+label+input+'</label>';
+  return '<div class="password-field"><label>'+label+input+'</label><button type="button" data-password-toggle aria-label="Show password" aria-pressed="false">'+icon('eye')+'</button></div>';
 }
+document.addEventListener('click',event=>{
+  const toggle=event.target.closest('[data-password-toggle]');
+  if(!toggle)return;
+  const input=toggle.parentElement.querySelector('input');
+  const show=input.type==='password';
+  input.type=show?'text':'password';
+  toggle.setAttribute('aria-label',show?'Hide password':'Show password');
+  toggle.setAttribute('aria-pressed',String(show));
+  toggle.innerHTML=icon(show?'eyeOff':'eye');
+});
 function showAuth(mode='login',message=''){
   document.querySelector('.layout').hidden=true;byId('businessBar').innerHTML='';document.querySelectorAll('dialog[open]').forEach(d=>d.close());
   const screen=byId('accountScreen');screen.hidden=false;
   const title={login:'Sign in',signup:'Create your account',verify:'Verify your email',recover:'Reset your password',recovery:'Enter your recovery code'}[mode];
-  screen.innerHTML='<h2>'+title+'</h2><p>Manage your CCTV properties with Xposure Hub.</p><form id="authForm" class="fields">'+authField('Email address','email','email')+(['login','signup'].includes(mode)?authField('Password','password','password'):'')+(['verify','recovery'].includes(mode)?authField('Email verification code','token'):'')+'<button class="primary wide">'+title+'</button></form><p role="status" id="authMessage">'+safe(message)+'</p><div class="buttons"><button type="button" data-auth="login">Sign in</button><button type="button" data-auth="signup">Register</button><button type="button" data-auth="recover">Forgot password</button></div>';
+  screen.innerHTML='<h2>'+title+'</h2><p>Manage your CCTV properties with Xposure Hub.</p><form id="authForm" class="fields">'+authField('Email address','email','email')+(['login','signup'].includes(mode)?authField('Password','password','password',mode==='login'):'')+(['verify','recovery'].includes(mode)?authField('Email verification code','token'):'')+'<button class="primary wide">'+title+'</button></form><p role="status" id="authMessage">'+safe(message)+'</p><div class="buttons"><button type="button" data-auth="login">Sign in</button><button type="button" data-auth="signup">Register</button><button type="button" data-auth="recover">Forgot password</button></div>';
   screen.querySelectorAll('[data-auth]').forEach(b=>b.onclick=()=>showAuth(b.dataset.auth));
   byId('authForm').onsubmit=async event=>{
-    event.preventDefault();const button=event.target.querySelector('button');button.disabled=true;
+    event.preventDefault();const button=event.target.querySelector('button.primary');button.disabled=true;
     const body=Object.fromEntries(new FormData(event.target));
     try{
       const action=mode==='recovery'?'verify':mode;
@@ -69,10 +81,12 @@ async function loadBusiness(){
   document.querySelector('.workspace').textContent=business.name;
   document.querySelector('.kicker').textContent=business.name;
   document.querySelector('.secure').textContent=account.role.replace('_',' ');
-  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.platform_owner?'<button id="ownerButton">Owner Console</button>':'')+'<button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
+  byId('businessBar').innerHTML='<div class="account-bar"><span>'+safe(account.email)+'</span>'+(account.platform_owner?'<button id="ownerButton">Owner Console</button>':'')+(hasDateRequests()?'<button id="dateRequestsButton">Date permissions</button>':'')+'<button id="settingsButton">Settings</button><button id="logoutButton">Sign out</button></div>';
   if(byId('ownerButton'))byId('ownerButton').onclick=()=>showOwnerConsole();
+  if(byId('dateRequestsButton'))byId('dateRequestsButton').onclick=()=>showDateRequests();
   byId('settingsButton').onclick=()=>showSettings();
   byId('logoutButton').onclick=async()=>{await send('/api/auth/logout',{});account=null;data=[];showAuth()};
+  await loadDateRequests();
   await refresh();
 }
 function settingsDialog(title,content){
@@ -114,4 +128,51 @@ async function showUsers(){
       };
     });
   }catch(error){byId('notice').textContent=error.message}
+}
+
+let dateRequests=[];
+function hasDateRequests(){
+  return account?.role==='super_admin'||(account?.role==='technician'&&['inspect','observations','manage_actions','manage_incidents'].some(can));
+}
+async function loadDateRequests(){
+  dateRequests=[];
+  if(!hasDateRequests())return;
+  const response=await apiFetch('/api/date-requests');
+  if(!response.ok)throw Error(await response.text());
+  dateRequests=await response.json();
+}
+async function showDateRequests(selectedDate=''){
+  const admin=account.role==='super_admin';
+  const d=settingsDialog('Date permissions','<div class="date-requests"></div>');
+  const content=d.querySelector('.date-requests');
+  const error=d.querySelector('.settingsError');
+  function paint(){
+    content.innerHTML=(admin?'':'<p>You can save inspections for today and the previous three days. For an older date, send a request to your administrator.</p><form><label>Inspection date<input name="date" type="date" max="'+day(-4)+'" value="'+safe(selectedDate)+'" required></label><label>Reason<textarea name="reason" maxlength="1000" required></textarea></label><button class="primary">Request permission</button></form>')+
+      '<h3>'+ (admin?'Team requests':'Your requests')+'</h3>'+ (dateRequests.length?dateRequests.map((r,index)=>'<article class="date-request"><strong>'+safe(r.inspection_date)+(admin?' · '+safe(r.email):'')+'</strong><p>'+safe(r.reason)+'</p><p>Status: '+safe(r.status)+'</p>'+(admin&&r.status==='pending'?'<div class="buttons"><button data-index="'+index+'" data-decision="approved">Approve</button><button data-index="'+index+'" data-decision="denied">Deny</button></div>':'')+'</article>').join(''):'<p>No date permission requests.</p>');
+    const form=content.querySelector('form');
+    if(form)form.onsubmit=event=>{
+      event.preventDefault();
+      save(Object.fromEntries(new FormData(form)));
+    };
+    content.querySelectorAll('[data-decision]').forEach(button=>button.onclick=()=>{
+      const row=dateRequests[Number(button.dataset.index)];
+      save({date:row.inspection_date,userId:row.user_id,decision:button.dataset.decision});
+    });
+  }
+  async function save(body){
+    error.textContent='';
+    content.querySelectorAll('button').forEach(button=>button.disabled=true);
+    try{
+      await send('/api/date-requests',body);
+      selectedDate='';
+      await loadDateRequests();
+      paint();
+      if(byId('modal').open)updateDateControls();
+      error.textContent=admin?'Decision saved.':'Request sent to your administrator.';
+    }catch(err){
+      error.textContent=err.message;
+      content.querySelectorAll('button').forEach(button=>button.disabled=false);
+    }
+  }
+  try{await loadDateRequests();paint()}catch(err){error.textContent=err.message}
 }

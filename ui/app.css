@@ -9,3 +9,9 @@
 
 .incident-search{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:12px 0}.incident-search label{flex:1;min-width:220px}.incident-search input{width:100%}.incident-search button{min-height:42px}
 .owner-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:20px 0}#ownerBody{margin-top:20px}#ownerBody td{max-width:380px;white-space:normal;overflow-wrap:anywhere}#ownerBody .scroll{margin-top:16px}
+
+.password-field { position: relative; }
+.password-field input { padding-right: 3rem; }
+.password-field button { position: absolute; right: .25rem; bottom: .25rem; padding: .35rem .5rem; border: 0; background: transparent; }
+.date-request { padding: .75rem 0; border-top: 1px solid #d8e2ed; }
+.date-request p { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -49,8 +49,13 @@ await status(await call('alice','/api/admin/users',{email:'pending@example.test'
 await status(await call('pending','/api/me'),403);
 await status(await call('alice','/api/admin/users',{id:'staff',role:'technician',active:1,permissions:['manage_users']}),400);
 console.log('PASS business ownership, legacy-owner isolation, scoped team lists, pending user binding, granular write/read permissions, anti-escalation, suspension/reactivation, CSRF, batch saves and cross-business record protection');
-// Incident history is tenant-scoped, permission-controlled and immutable.
-const incident={id:crypto.randomUUID(),kind:'incident',payload:{school:'School A',date:'2026-11-24',time:'14:30',endTime:'14:45',recorder:'DVR 1',camera:'1',location:'Entrance',officer:'Inspector',incidentTitle:'Gate incident',description:'Review visitor entry',recorderTime:'DVR clock is five minutes slow',remarks:'Preserve relevant footage'}};
+// Incident history is tenant-scoped and permission-controlled.
+const lagosDate=offset=>{
+ const date=new Date(new Date().toLocaleDateString('en-CA',{timeZone:'Africa/Lagos'}));
+ date.setUTCDate(date.getUTCDate()+offset);
+ return date.toISOString().slice(0,10);
+};
+const incident={id:crypto.randomUUID(),kind:'incident',payload:{school:'School A',date:lagosDate(0),time:'14:30',endTime:'14:45',recorder:'DVR 1',camera:'1',location:'Entrance',officer:'Inspector',incidentTitle:'Gate incident',description:'Review visitor entry',recorderTime:'DVR clock is five minutes slow',remarks:'Preserve relevant footage'}};
 await status(await call('alice','/api/records',incident),200);
 await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID()}),403);
 assert.ok(!(await (await call('staff','/api/records')).json()).some(r=>r.kind==='incident'));
@@ -59,7 +64,28 @@ await status(await call('alice','/api/admin/users',{id:'staff',role:'technician'
 assert.equal((await (await call('staff','/api/records')).json()).find(r=>r.kind==='incident').recorderTime,incident.payload.recorderTime);
 await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID(),payload:{...incident.payload,endTime:'14:00'}}),400);
 await status(await call('staff','/api/records',{...incident,id:crypto.randomUUID(),payload:{...incident.payload,date:'2026-02-30'}}),400);
-await status(await call('staff','/api/records',{...incident,update:true,version:1}),400);
+const change={...incident,update:true,version:1};
+await status(await call('staff','/api/records',change),200);
+await status(await call('staff','/api/records',change),409);
+const datedIncident=offset=>({...incident,id:crypto.randomUUID(),payload:{...incident.payload,date:lagosDate(offset)}});
+await status(await call('staff','/api/records',datedIncident(1)),403);
+await status(await call('staff','/api/records',datedIncident(-3)),200);
+const old=datedIncident(-4);
+await status(await call('alice','/api/records',old),200);
+const oldEdit={...old,update:true,version:1};
+await status(await call('staff','/api/records',oldEdit),403);
+await status(await call('staff','/api/records',{...oldEdit,payload:{...old.payload,date:lagosDate(0)}}),403);
+const date=old.payload.date;
+await status(await call('staff','/api/date-requests',{date,decision:'approved',userId:'staff'}),400);
+await status(await call('staff','/api/date-requests',{date,reason:'Correct the playback notes.'}),200);
+await status(await call('staff','/api/date-requests',{date,reason:'Duplicate.'}),409);
+const approve={date,decision:'approved',userId:'staff'};
+await status(await call('bob','/api/date-requests',approve),409);
+await status(await call('staff','/api/records',oldEdit),403);
+await status(await call('alice','/api/date-requests',approve),200);
+assert.equal((await (await call('staff','/api/date-requests')).json())[0].status,'approved');
+await status(await call('staff','/api/records',oldEdit),200);
+await status(await call('staff','/api/records',datedIncident(-5)),403);
 console.log('PASS incident persistence, timestamp validation, permission checks and tenant isolation');
 env.PLATFORM_OWNER_EMAIL='platform@example.test';
 await status(await call('platform','/api/me'),200);
