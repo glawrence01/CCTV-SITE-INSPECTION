@@ -119,7 +119,7 @@ async function accountRoutes(req,env,user,url){
     const response=await recordRoutes(req,env,user);
     if(req.method==='GET'&&!permitted(user,'view_reports')&&response.ok){
       const rows=await response.json();
-      const fields=['id','kind','school','date','time','camera','location','recorder','installation','live','playback','power','storage','monitor','fault','channels'];
+      const fields=['id','kind','school','date','time','camera','location','recorder','installation','live','playback','power','storage','monitor','fault','channels','dateAccuracy','timeAccuracy','earliest','replacements'];
       return jsonResponse(rows.filter(r=>['register','camera','round','recorder'].includes(r.kind)||permitted(user,recordPermission[r.kind])).map(r=>permitted(user,recordPermission[r.kind])?r:Object.fromEntries(fields.filter(k=>k in r).map(k=>[k,r[k]]))));
     }
     return response;

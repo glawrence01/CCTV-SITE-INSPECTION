@@ -1,4 +1,4 @@
-function makeDailyPdf(rows, title, scope, date) {
+function makeDailyPdf(rows, title, scope, date, inventory, actions) {
   const canvas = document.createElement('canvas');
   canvas.width = 1190;
   canvas.height = 1684;
@@ -19,16 +19,17 @@ function makeDailyPdf(rows, title, scope, date) {
   function finishPage() {
     images.push(Uint8Array.from(atob(canvas.toDataURL('image/jpeg', .86).split(',')[1]), c => c.charCodeAt(0)));
   }
-  function line(text, bold = false) {
+  function line(text, bold = false, color = '#122c49') {
     if (y > canvas.height - margin) {
       finishPage();
       startPage();
     }
     ctx.font = (bold ? 'bold ' : '') + '26px sans-serif';
+    ctx.fillStyle = color;
     ctx.fillText(text, margin, y);
     y += 37;
   }
-  function paragraph(text, bold = false) {
+  function paragraph(text, bold = false, color) {
     for (const sourceLine of String(text).split(/\r?\n/)) {
       let current = '';
       for (const word of sourceLine.split(/\s+/)) {
@@ -39,30 +40,69 @@ function makeDailyPdf(rows, title, scope, date) {
           current = candidate;
           continue;
         }
-        if (current) line(current, bold);
+        if (current) line(current, bold, color);
         current = '';
         for (const char of word) {
           if (ctx.measureText(current + char).width > maxWidth) {
-            line(current, bold);
+            line(current, bold, color);
             current = '';
           }
           current += char;
         }
       }
-      if (current) line(current, bold);
+      if (current) line(current, bold, color);
     }
   }
   startPage();
   paragraph(title, true);
   paragraph(scope);
   y += 23;
-  const records = rows.filter(r => r.kind !== 'register' && !['Unchecked', 'Empty port'].includes(r.channelStatus));
-  if (!records.length) paragraph('No records for this selection.');
-  for (const row of records) {
-    paragraph([row.time, pages[row.kind], row.school, row.recorder, row.camera].filter(Boolean).join(' · '), true);
-    const reportFields = ['location','officer','shift','live','playback','power','storage','earliest','monitor','fault','channelSummary','incidentTitle','description','endTime','recorderTime','observation','action','owner','due','state','remarks'];
-    for (const field of reportFields) if (row[field]) paragraph(names[field] + ': ' + row[field]);
+  const cameras = summarizeCameras(rows, inventory);
+  paragraph('Camera summary', true);
+  if (cameras.total) {
+    paragraph(cameras.total + ' cameras in scope · ' + cameras.working + ' working · ' + cameras.faults.length + ' with faults · ' + cameras.unchecked + ' with live view unverified');
+    paragraph('Not live or intermittent: ' + cameras.notLive + ' of ' + cameras.total + ' (' + reportPercent(cameras.offlineRate) + ')', true);
+    paragraph('Camera risk exposure: ' + cameras.faults.length + ' of ' + cameras.total + ' (' + reportPercent(cameras.exposure) + ')', true);
+    if (cameras.unchecked) paragraph('These percentages show confirmed issues. Check the remaining cameras to confirm coverage.');
+    if (!cameras.faults.length && !cameras.unchecked) paragraph('Good news! All ' + cameras.total + ' cameras in this report are working.');
+  } else {
+    paragraph('No registered or checked cameras were found for this selection.');
+  }
+  if (cameras.recommendation) paragraph(cameras.recommendation, true);
+  if (cameras.faults.length) {
+    y += 18;
+    paragraph('Cameras needing attention', true, '#a32034');
+    for (const camera of cameras.faults) {
+      paragraph([camera.school,camera.recorder,camera.camera,camera.location].filter(Boolean).join(' · '), true);
+      paragraph(camera.issues.join(' · '), false, '#a32034');
+    }
+  }
+  y += 23;
+  paragraph('Action points', true);
+  if (!actions.length) paragraph('No action points for this selection.');
+  for (const action of actions) {
+    paragraph(action.action, true);
+    paragraph([action.school,action.recorder,action.camera,action.state,action.due&&'Due '+action.due].filter(Boolean).join(' · '));
+    if (action.owner) paragraph('Assigned to: ' + action.owner);
+    if (action.remarks) paragraph(action.remarks);
+  }
+  const recorders = latest(rows.filter(row => row.kind === 'recorder' && systemFields.some(field => row[field])), ['school','recorder']);
+  y += 23;
+  paragraph('Recorder and system checks', true);
+  if (!recorders.length) paragraph('No system checks recorded for this selection.');
+  for (const row of recorders) {
+    paragraph([row.school,row.recorder,row.time].filter(Boolean).join(' · '), true);
+    paragraph(systemFields.filter(field => row[field]).map(field => names[field] + ': ' + row[field]).join(' · '));
+    if (row.remarks) paragraph(row.remarks);
+  }
+  const other = rows.filter(row => ['incident','note'].includes(row.kind));
+  if (other.length) {
     y += 23;
+    paragraph('Incidents and observations', true);
+    for (const row of other) {
+      paragraph([row.time,row.school,row.incidentTitle||pages[row.kind],row.recorder,row.camera].filter(Boolean).join(' · '), true);
+      for (const field of ['description','observation','recorderTime','remarks']) if (row[field]) paragraph(row[field]);
+    }
   }
   finishPage();
   return new File(assembleReportPdf(images, canvas.width, canvas.height), 'CCTV-report-' + date + '.pdf', { type: 'application/pdf' });
@@ -109,7 +149,8 @@ function showDailyReport(rows) {
   const date = filter.date || day();
   const scope = [filter.school || 'All properties', filter.recorder, filter.camera].filter(Boolean).join(' · ');
   const title = account.businesses.find(b => b.id === businessId).name;
-  const file = makeDailyPdf(rows, title, scope, date);
+  const inventory = data.filter(row => row.kind === 'register' && matches(row, false));
+  const file = makeDailyPdf(rows, title, scope, date, inventory, actionPointsForDay(data, {...filter, date}));
   const subject = 'CCTV inspection report · ' + date;
   const dialog = settingsDialog('Share daily PDF', '<p>' + esc(date + ' · ' + scope) + '</p><div class="buttons"><button type="button" id="sharePdf" hidden>Share PDF via email or WhatsApp</button><a id="downloadPdf">Download PDF</a></div><p>On devices without file sharing, download the PDF and attach it to your email or WhatsApp message.</p><div class="buttons"><a id="reportEmail">Open email</a><a id="reportWhatsApp" target="_blank" rel="noopener noreferrer">Open WhatsApp</a></div>');
   const url = URL.createObjectURL(file);

@@ -122,3 +122,14 @@ assert.equal((await (await call('platform','/api/owner/email')).json()).rows.len
 const audit=await (await call('platform','/api/owner/audit')).json();assert.ok(audit.rows.some(r=>r.action==='invoice-status'));assert.ok(audit.rows.some(r=>r.action==='email-recover'));
 await status(await call('platform','/api/owner/user-status',{id:'staff',blocked:1,reason:'Cross origin'},null,'https://evil.test'),403);
 console.log('PASS owner-only access, customer-data boundary, platform suspension enforcement, manual billing arithmetic, support tracking, redacted email log and audit history');
+
+const systemRound={id:crypto.randomUUID(),kind:'round',payload:{school:'School A',date:lagosDate(0),time:'16:30',officer:'Alice',shift:'Day',recorder:'DVR 1',remarks:'',channels:[{status:'Unchecked',camera:'CH 1',location:'Entrance'}],storage:'Failed',dateAccuracy:'Accurate',timeAccuracy:'Incorrect',replacements:'Power pack, HDD'}};
+await status(await call('alice','/api/records',systemRound),200);
+await status(await call('alice','/api/records',{...systemRound,id:crypto.randomUUID(),payload:{...systemRound.payload,replacements:'Unknown'}}),400);
+const action={id:crypto.randomUUID(),kind:'action',payload:{school:'School A',date:lagosDate(0),time:'16:35',officer:'Alice',shift:'Day',action:'Replace recorder disk',state:'Open',owner:'first@example.test, second@example.test, first@example.test'}};
+await status(await call('alice','/api/records',action),200);
+await status(await call('alice','/api/records',{...action,id:crypto.randomUUID(),payload:{...action.payload,owner:'invalid, second@example.test'}}),400);
+const updatedRecords=await (await call('alice','/api/records')).json();
+assert.equal(updatedRecords.find(r=>r.id===action.id).owner,'first@example.test, second@example.test');
+assert.equal(updatedRecords.find(r=>r.id===systemRound.id).replacements,'Power pack, HDD');
+assert.equal(updatedRecords.find(r=>r.id===systemRound.id).timeAccuracy,'Incorrect');

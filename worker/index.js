@@ -1,7 +1,16 @@
 const assets=__ASSETS__;
 const common=['school','date','time','officer','shift'];
 const required={incident:['school','date','time','officer','recorder','camera','location','incidentTitle','description'],register:['school','camera','location','installation'],camera:[...common,'camera','location','recorder','live','playback','power','fault'],recorder:[...common,'recorder','power','storage','playback','monitor'],note:[...common,'observation'],action:[...common,'action','state']};
-const allowed={incident:['endTime','recorderTime','remarks'],register:['recorder','remarks'],camera:['remarks'],recorder:['earliest','remarks'],note:['remarks'],action:['camera','recorder','owner','due','remarks']};
+const systemChoices={
+  storage:['Healthy','Warning','Failed','Not checked'],
+  dateAccuracy:['Accurate','Incorrect','Corrected during inspection','Not checked'],
+  timeAccuracy:['Accurate','Incorrect','Corrected during inspection','Not checked'],
+  power:['On','Off','Unstable','Not checked'],
+  playback:['Working','Failed','Not checked'],
+  monitor:['Working','Faulty','Not installed','Not checked']
+};
+const systemFields=[...Object.keys(systemChoices),'earliest','replacements'];
+const allowed={incident:['endTime','recorderTime','remarks'],register:['recorder','remarks'],camera:['remarks'],recorder:[...systemFields,'remarks'],note:['remarks'],action:['camera','recorder','owner','due','remarks']};
 const reply=(body,status=200)=>new Response(body,{status,headers:{'Cache-Control':'no-store'}});
 async function registerCameras(db,payload,bid){
   const clean=v=>typeof v==='string'?v.trim():'';
@@ -37,13 +46,20 @@ if(kind==='round'){
   if(!/^[a-f0-9-]{36}$/i.test(id)||!payload||!Array.isArray(payload.channels))return reply('Invalid inspection.',400);
   const statuses=['Unchecked','Working','No view','Faulty camera','Faulty cable','Empty port'];
   const channels=payload.channels;
-  if(!channels.length||channels.length>128||channels.some(c=>!c||!statuses.includes(c.status)||typeof c.camera!=='string'||typeof c.location!=='string'||c.camera.length>200||c.location.length>200)||channels.every(c=>c.status==='Unchecked'))return reply('Mark at least one channel and check the channel list.',400);
+  if(!channels.length||channels.length>128||channels.some(c=>!c||!statuses.includes(c.status)||typeof c.camera!=='string'||typeof c.location!=='string'||c.camera.length>200||c.location.length>200))return reply('Mark at least one channel and check the channel list.',400);
   const record={channels:channels.map(({status,camera,location})=>({status,camera,location}))};
   for(const field of [...common,'recorder','remarks']){
     const value=payload[field];
     if(typeof value!=='string'||value.length>3000||(field!=='remarks'&&!value.trim()))return reply('Complete the inspection details.',400);
     record[field]=value.trim();
   }
+  for(const field of systemFields){
+    if(payload[field]!==undefined&&typeof payload[field]!=='string')return reply('Invalid system check.',400);
+    if(payload[field]?.trim())record[field]=payload[field].trim();
+  }
+  const invalid=validateSystemChecks(record);
+  if(invalid)return invalid;
+  if(channels.every(c=>c.status==='Unchecked')&&!systemFields.some(field=>record[field]&&record[field]!=='Not checked'))return reply('Record a system check or mark at least one channel before saving.',400);
   return await saveInspectionRecord(env.DB,user,{id,kind,body:record,update,version});
 }
 if(!Object.hasOwn(required,kind)||!payload||typeof payload!=='object'||!/^[0-9a-f-]{36}$/i.test(id))return reply('Invalid record.',400);
@@ -54,8 +70,23 @@ if(kind==='incident'){
   if(body.endTime&&(!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime)||body.endTime<body.time))return reply('End time must be on or after the start time on the same day.',400);
   if(!update)body.loggedAt=new Date().toISOString();
 }
-if(body.earliest&&body.earliest>body.date)return reply('Earliest recording must be on or before the inspection date.',400);
+if(kind==='recorder'){const invalid=validateSystemChecks(body);if(invalid)return invalid;}
 return await saveInspectionRecord(env.DB,user,{id,kind,body,update,version});}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number is already registered on this DVR/NVR at this school.',409);return reply('Records are unavailable. Please try again.',503)}}
+function validateSystemChecks(body){
+  if(Object.entries(systemChoices).some(([field,options])=>body[field]&&!options.includes(body[field])))return reply('Choose a valid system status.',400);
+  if(body.replacements){
+    const parts=body.replacements.split(',').map(v=>v.trim());
+    if(parts.some(part=>!['Camera','Power pack','HDD'].includes(part)))return reply('Choose a valid replacement part.',400);
+    body.replacements=[...new Set(parts)].join(', ');
+  }
+  if(body.earliest&&(!validInspectionDate(body.earliest)||body.earliest>body.date))return reply('Earliest recording must be on or before the inspection date.',400);
+}
+function normalizeActionRecipients(body,previous){
+  if(!body.owner||body.owner===previous?.owner)return;
+  const emails=body.owner.split(',').map(v=>v.trim());
+  if(body.owner.length>1000||emails.some(email=>email.length>254||!/^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*$/i.test(email)))return reply('Enter valid email addresses separated by commas.',400);
+  body.owner=[...new Set(emails)].join(', ');
+}
 async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
   const bid=user.business_id;
   if(kind!=='register'){
@@ -66,6 +97,7 @@ async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
     const prior=await db.prepare('SELECT payload FROM records WHERE id=? AND kind=? AND business_id=?').bind(id,kind,bid).first();
     if(!prior)return reply('This record is unavailable. Refresh to check.',409);
     const previous=JSON.parse(prior.payload);
+    if(kind==='action'){const invalid=normalizeActionRecipients(body,previous);if(invalid)return invalid;}
     if(user.role==='technician' && kind!=='register' && previous.date!==body.date)return reply('The original inspection date cannot be changed.',403);
     if(kind==='incident' && previous.loggedAt)body.loggedAt=previous.loggedAt;
     body.version=Number(version)+1;
@@ -73,6 +105,7 @@ async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
       .bind(JSON.stringify(body),id,kind,bid,version).run();
     if(!result.meta.changes)return reply('This record changed. Close the form and refresh before editing.',409);
   }else{
+    if(kind==='action'){const invalid=normalizeActionRecipients(body);if(invalid)return invalid;}
     body.version=1;
     await db.prepare('INSERT INTO records(id,kind,payload,business_id) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,kind,JSON.stringify(body),bid).run();
   }
