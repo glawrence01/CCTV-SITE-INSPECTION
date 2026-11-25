@@ -7,10 +7,11 @@ const context=vm.createContext({document:{getElementById:el,querySelectorAll:()=
 vm.runInContext(readFileSync('ui/app.js','utf8'),context);
 vm.runInContext(`data=[{kind:'camera',date:day(-1),time:'10:00',school:'School A',recorder:'DVR 1',camera:'old',location:'YESTERDAY_ONLY',live:'Working',playback:'Working',power:'On'}];render()`,context);
 assert.equal(vm.runInContext('filter.date',context),vm.runInContext('day()',context));
-assert.ok(el('view').innerHTML.includes('No inspections recorded for this date'));
+assert.ok(el('view').innerHTML.includes('Latest DVR/NVR updates'));
+assert.ok(el('view').innerHTML.includes(vm.runInContext('day(-1)',context)));
 assert.ok(!el('view').innerHTML.includes('YESTERDAY_ONLY'));
 vm.runInContext('filter.date=day(-1);render()',context);
-assert.ok(el('view').innerHTML.includes('YESTERDAY_ONLY'));
+assert.ok(el('view').innerHTML.includes('DVR 1'));
 assert.ok(el('view').innerHTML.includes('Share daily PDF'));
 assert.ok(!el('view').innerHTML.includes('Camera status for this day'));
 assert.ok(!el('view').innerHTML.includes('Recorder status for this day'));
@@ -68,4 +69,11 @@ assert.ok(!printed.includes('CH 4'));
 printed.length=0;
 vm.runInContext("makeDailyPdf(checks.map(row=>({...row,live:'Working',playback:'Working'})),'Test business','All properties','2026-11-25',inventory,[])",context);
 assert.ok(printed.some(line=>line.includes('Good news! All 10 cameras')));
-assert.match(vm.runInContext("actionEmailLink({owner:'a@example.test, b@example.test',school:'School',action:'Check the HDD'})",context),/^mailto:a@example.test,b@example.test\?/);
+
+vm.runInContext(`
+const inspection=(id,recorder,time,status)=>expandRound({id,kind:'round',school:'School',recorder,date:day(),time,channels:[{camera:'CH 1',status,location:''}]});
+const records=[...inspection('new-a','DVR A','11:00','Working'),...inspection('new-b','DVR B','10:00','No view'),...inspection('old-a','DVR A','09:00','No view')];
+const latestChecks=latestDeviceChecks(records,{date:day()});
+`,context);
+assert.deepEqual(Array.from(vm.runInContext('latestChecks.map(row=>row.id)',context)),['new-a','new-b','new-a-1','new-b-1']);
+assert.equal(vm.runInContext('summarizeCameras(latestChecks,[]).faults.length',context),1);

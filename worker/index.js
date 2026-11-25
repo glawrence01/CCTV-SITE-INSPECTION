@@ -60,7 +60,7 @@ if(kind==='round'){
   const invalid=validateSystemChecks(record);
   if(invalid)return invalid;
   if(channels.every(c=>c.status==='Unchecked')&&!systemFields.some(field=>record[field]&&record[field]!=='Not checked'))return reply('Record a system check or mark at least one channel before saving.',400);
-  return await saveInspectionRecord(env.DB,user,{id,kind,body:record,update,version});
+  return await saveInspectionRecord(env,user,{id,kind,body:record,update,version});
 }
 if(!Object.hasOwn(required,kind)||!payload||typeof payload!=='object'||!/^[0-9a-f-]{36}$/i.test(id))return reply('Invalid record.',400);
 let body={};for(let k of [...required[kind],...allowed[kind]]){if(typeof payload[k]==='string')body[k]=payload[k].trim();if((body[k]?.length||0)>3000)return reply('Entry too long.',400)}
@@ -71,7 +71,7 @@ if(kind==='incident'){
   if(!update)body.loggedAt=new Date().toISOString();
 }
 if(kind==='recorder'){const invalid=validateSystemChecks(body);if(invalid)return invalid;}
-return await saveInspectionRecord(env.DB,user,{id,kind,body,update,version});}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number is already registered on this DVR/NVR at this school.',409);return reply('Records are unavailable. Please try again.',503)}}
+return await saveInspectionRecord(env,user,{id,kind,body,update,version});}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number is already registered on this DVR/NVR at this school.',409);return reply('Records are unavailable. Please try again.',503)}}
 function validateSystemChecks(body){
   if(Object.entries(systemChoices).some(([field,options])=>body[field]&&!options.includes(body[field])))return reply('Choose a valid system status.',400);
   if(body.replacements){
@@ -87,8 +87,10 @@ function normalizeActionRecipients(body,previous){
   if(body.owner.length>1000||emails.some(email=>email.length>254||!/^[a-z0-9.!#$%&'*+\/=?^_`{|}~-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*$/i.test(email)))return reply('Enter valid email addresses separated by commas.',400);
   body.owner=[...new Set(emails)].join(', ');
 }
-async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
+async function saveInspectionRecord(env,user,{id,kind,body,update,version}){
+  const db=env.DB;
   const bid=user.business_id;
+  let notify=kind==='action';
   if(kind!=='register'){
     const blocked=await checkInspectionDate(db,user,body.date);
     if(blocked)return blocked;
@@ -97,7 +99,10 @@ async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
     const prior=await db.prepare('SELECT payload FROM records WHERE id=? AND kind=? AND business_id=?').bind(id,kind,bid).first();
     if(!prior)return reply('This record is unavailable. Refresh to check.',409);
     const previous=JSON.parse(prior.payload);
-    if(kind==='action'){const invalid=normalizeActionRecipients(body,previous);if(invalid)return invalid;}
+    if(kind==='action'){
+      const invalid=normalizeActionRecipients(body,previous);if(invalid)return invalid;
+      notify=['action','owner','school','recorder','camera','date','due','state','remarks'].some(field=>(previous[field]||'')!==(body[field]||''));
+    }
     if(user.role==='technician' && kind!=='register' && previous.date!==body.date)return reply('The original inspection date cannot be changed.',403);
     if(kind==='incident' && previous.loggedAt)body.loggedAt=previous.loggedAt;
     body.version=Number(version)+1;
@@ -107,8 +112,27 @@ async function saveInspectionRecord(db,user,{id,kind,body,update,version}){
   }else{
     if(kind==='action'){const invalid=normalizeActionRecipients(body);if(invalid)return invalid;}
     body.version=1;
-    await db.prepare('INSERT INTO records(id,kind,payload,business_id) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,kind,JSON.stringify(body),bid).run();
+    const result=await db.prepare('INSERT INTO records(id,kind,payload,business_id) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,kind,JSON.stringify(body),bid).run();
+    if(!result.meta.changes)notify=false;
   }
+  if(kind==='action')return jsonResponse({saved:true,email:notify?await sendActionEmail(env,bid,id,body):'unchanged'});
   return reply('Saved');
+}
+async function sendActionEmail(env,bid,id,action){
+  const recipients=(action.owner||'').split(',').map(value=>value.trim()).filter(Boolean);
+  if(!recipients.length||recipients.some(email=>!email.includes('@')))return 'no_recipients';
+  if(!env.RESEND_API_KEY||!env.ACTION_EMAIL_FROM)return 'unconfigured';
+  const text=[action.action,'Property: '+action.school,action.recorder&&'Recorder: '+action.recorder,
+    action.camera&&'Camera: '+action.camera,'Date: '+action.date,action.due&&'Due: '+action.due,
+    'Status: '+action.state,action.remarks&&'Notes: '+action.remarks].filter(Boolean).join('\n');
+  try{
+    const response=await fetch('https://api.resend.com/emails',{
+      method:'POST',
+      headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json','Idempotency-Key':'cctv-action/'+bid+'/'+id+'/'+action.version},
+      body:JSON.stringify({from:env.ACTION_EMAIL_FROM,to:recipients,subject:'CCTV action point · '+action.school.replace(/[\r\n]+/g,' '),text}),
+      signal:AbortSignal.timeout(8000)
+    });
+    return response.ok?'sent':'failed';
+  }catch{return 'failed'}
 }
 export default {async fetch(req,env){try{return await handleRequest(req,env)}catch(error){return reply('The request could not be completed. Please retry.',503)}}};

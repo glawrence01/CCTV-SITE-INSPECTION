@@ -86,13 +86,19 @@ function makeDailyPdf(rows, title, scope, date, inventory, actions) {
     if (action.owner) paragraph('Assigned to: ' + action.owner);
     if (action.remarks) paragraph(action.remarks);
   }
-  const recorders = latest(rows.filter(row => row.kind === 'recorder' && systemFields.some(field => row[field])), ['school','recorder']);
+  const recorders = new Map(rows.filter(row => row.kind === 'recorder').map(row=>[key(row.school,row.recorder),row]));
+  const devices = latestSummaryDevices(rows, inventory);
   y += 23;
-  paragraph('Recorder and system checks', true);
-  if (!recorders.length) paragraph('No system checks recorded for this selection.');
-  for (const row of recorders) {
-    paragraph([row.school,row.recorder,row.time].filter(Boolean).join(' · '), true);
-    paragraph(systemFields.filter(field => row[field]).map(field => names[field] + ': ' + row[field]).join(' · '));
+  paragraph('Latest DVR/NVR updates', true);
+  if (!devices.length) paragraph('No DVR/NVRs found for this selection.');
+  for (const device of devices) {
+    paragraph([device.school, device.recorder, device.date ? [device.date,device.time].filter(Boolean).join(' ') : 'No inspection recorded'].join(' · '), true);
+    const row = recorders.get(key(device.school,device.recorder));
+    if (!row) continue;
+    if (systemFields.some(field=>row[field])) {
+      const details = systemFields.filter(field=>row[field]).map(field=>names[field]+': '+row[field]).join(' · ');
+      paragraph((row.date!==device.date||row.time!==device.time?'Recorder check '+row.date+' '+row.time+' · ':'')+details);
+    }
     if (row.remarks) paragraph(row.remarks);
   }
   const other = rows.filter(row => ['incident','note'].includes(row.kind));
@@ -150,7 +156,7 @@ function showDailyReport(rows) {
   const scope = [filter.school || 'All properties', filter.recorder, filter.camera].filter(Boolean).join(' · ');
   const title = account.businesses.find(b => b.id === businessId).name;
   const inventory = data.filter(row => row.kind === 'register' && matches(row, false));
-  const file = makeDailyPdf(rows, title, scope, date, inventory, actionPointsForDay(data, {...filter, date}));
+  const file = makeDailyPdf([...latestDeviceChecks(data,{...filter,date}),...rows.filter(row=>['incident','note'].includes(row.kind))], title, scope, date, inventory, actionPointsForDay(data, {...filter, date}));
   const subject = 'CCTV inspection report · ' + date;
   const dialog = settingsDialog('Share daily PDF', '<p>' + esc(date + ' · ' + scope) + '</p><div class="buttons"><button type="button" id="sharePdf" hidden>Share PDF via email or WhatsApp</button><a id="downloadPdf">Download PDF</a></div><p>On devices without file sharing, download the PDF and attach it to your email or WhatsApp message.</p><div class="buttons"><a id="reportEmail">Open email</a><a id="reportWhatsApp" target="_blank" rel="noopener noreferrer">Open WhatsApp</a></div>');
   const url = URL.createObjectURL(file);

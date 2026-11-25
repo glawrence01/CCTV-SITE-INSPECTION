@@ -133,3 +133,20 @@ const updatedRecords=await (await call('alice','/api/records')).json();
 assert.equal(updatedRecords.find(r=>r.id===action.id).owner,'first@example.test, second@example.test');
 assert.equal(updatedRecords.find(r=>r.id===systemRound.id).replacements,'Power pack, HDD');
 assert.equal(updatedRecords.find(r=>r.id===systemRound.id).timeAccuracy,'Incorrect');
+
+const requests=[];
+const authFetch=globalThis.fetch;
+globalThis.fetch=async (url,options)=>{
+ if(url!=='https://api.resend.com/emails')return authFetch(url,options);
+ requests.push({body:JSON.parse(options.body),key:options.headers['Idempotency-Key']});
+ return Response.json({id:'test-message'},{status:200});
+};
+const emailAction={...action,id:crypto.randomUUID()};
+assert.equal((await (await call('alice','/api/records', {...emailAction,id:crypto.randomUUID()})).json()).email,'unconfigured');
+env.RESEND_API_KEY='test-only';
+env.ACTION_EMAIL_FROM='notifications@example.test';
+assert.equal((await (await call('alice','/api/records',emailAction)).json()).email,'sent');
+assert.deepEqual(requests[0].body.to,['first@example.test','second@example.test']);
+assert.match(requests[0].key,/^cctv-action\//);
+assert.equal((await (await call('alice','/api/records',emailAction)).json()).email,'unchanged');
+assert.equal(requests.length,1);
