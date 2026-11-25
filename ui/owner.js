@@ -7,7 +7,7 @@ async function showOwnerConsole(){
  if(!account?.platform_owner)return;
  document.querySelector('.layout').hidden=true;byId('accountScreen').hidden=false;
  byId('accountScreen').style.maxWidth='1200px';
- byId('businessBar').innerHTML='<div class="account-bar"><strong>Software Owner Console</strong><span>'+safe(account.email)+'</span>'+(account.business_id?'<button id="ownerBack">My business dashboard</button>':'')+'<button id="ownerPassword">Change password</button><button id="ownerLogout">Sign out</button></div>';
+ byId('businessBar').innerHTML='<div class="account-bar owner-account-bar"><strong>Software Owner Console</strong><span>'+safe(account.email)+'</span><div class="owner-account-actions">'+(account.business_id?'<button id="ownerBack">My business dashboard</button>':'')+'<button id="ownerPassword">Change password</button><button id="ownerLogout">Sign out</button></div></div>';
  if(byId('ownerBack'))byId('ownerBack').onclick=async()=>{byId('accountScreen').style.maxWidth='520px';try{await loadBusiness()}catch(e){await showOwnerConsole();byId('ownerError').textContent=e.message}};
  byId('ownerPassword').onclick=()=>showSettings('password');
  byId('ownerLogout').onclick=async()=>{await send('/api/auth/logout',{});account=null;byId('accountScreen').style.maxWidth='520px';showAuth()};
@@ -21,17 +21,30 @@ async function showOwnerConsole(){
   const result=await ownerGet(ownerTab+'?q='+encodeURIComponent(ownerQuery)+(ownerTab==='users'?'&status='+ownerStatus:''));ownerRows=result.rows;
   const cols={businesses:['name','users','cameras','suspended','plan','status','renewal'],users:['email','business','role','access','deleted_at'],pending:['email','business','role','active'],invoices:['id','business','description','amount','due','status','payment_reference'],support:['email','business','subject','details','status','resolution','created'],email:['email','action','outcome','created'],audit:['actor','action','target','details','created']}[ownerTab];
   const actions={businesses:'Manage',users:'Manage access',invoices:'Update payment',support:'Update case',email:'Email support'};
-  byId('ownerBody').innerHTML='<form id="ownerSearch" class="incident-search"><label>Search '+safe(ownerTabs[ownerTab])+'<input name="query" value="'+safe(ownerQuery)+'"></label>'+(ownerTab==='users'?ownerSelect('Account status','status',['all','active','suspended','deleted'],ownerStatus):'')+'<button>Search</button></form>'+(ownerTab==='invoices'?'<p>Manual billing records. Mark a payment as paid only after checking your bank or payment provider. Nothing is charged automatically.</p><button id="newInvoice" class="primary">Create invoice record</button>':'')+(ownerTab==='support'?'<button id="newSupport" class="primary">Log support case</button>':'')+(ownerTab==='email'?'<p>History begins with this update. “Accepted” does not confirm delivery. Bounces and spam placement are not tracked. Confirmation and reset emails can be requested again below.</p>':'')+'<div class="scroll"><table><thead><tr>'+cols.map(c=>'<th>'+safe(c.replaceAll('_',' '))+'</th>').join('')+(actions[ownerTab]?'<th>Action</th>':'')+'</tr></thead><tbody>'+ownerRows.map((row,i)=>'<tr>'+cols.map(c=>'<td>'+safe(c==='access'?ownerAccessLabel(row):c==='amount'?money(row.amount_minor,row.currency):['suspended','platform_blocked'].includes(c)?(row[c]?'Yes':'No'):c==='active'?(row[c]?'Active':'Suspended'):row[c]??'—')+'</td>').join('')+(actions[ownerTab]?'<td><button data-owner-row="'+i+'">'+actions[ownerTab]+'</button></td>':'')+'</tr>').join('')+'</tbody></table></div>'+(ownerRows.length?'':'<p>No matching records.</p>')+(result.more?'<p>Showing 500 results. Narrow your search for additional records.</p>':'');
+  byId('ownerBody').innerHTML='<form id="ownerSearch" class="incident-search"><label>Search '+safe(ownerTabs[ownerTab])+'<input name="query" value="'+safe(ownerQuery)+'"></label>'+(ownerTab==='users'?ownerSelect('Account status','status',['all','active','suspended','deleted'],ownerStatus):'')+'<button>Search</button></form>'+(ownerTab==='invoices'?'<p>Manual billing records. Mark a payment as paid only after checking your bank or payment provider. Nothing is charged automatically.</p><button id="newInvoice" class="primary">Create invoice record</button>':'')+(ownerTab==='support'?'<button id="newSupport" class="primary">Log support case</button>':'')+(ownerTab==='email'?'<p>History begins with this update. “Accepted” does not confirm delivery. Bounces and spam placement are not tracked. Confirmation and reset emails can be requested again below.</p>':'')+'<div class="scroll owner-results"><table role="table"><thead role="rowgroup"><tr role="row">'+cols.map(c=>'<th scope="col" role="columnheader">'+safe(ownerColumnLabel(c))+'</th>').join('')+(actions[ownerTab]?'<th scope="col" role="columnheader">Action</th>':'')+'</tr></thead><tbody role="rowgroup">'+ownerRows.map((row,i)=>
+  '<tr role="row">'+cols.map(c=>'<td role="cell"><span class="owner-cell-label" aria-hidden="true">'+safe(ownerColumnLabel(c))+'</span><span class="owner-cell-value">'+safe(ownerCellValue(row,c))+'</span></td>').join('')+
+  (actions[ownerTab]?'<td role="cell" class="owner-row-action"><button data-owner-row="'+i+'">'+actions[ownerTab]+'</button></td>':'')+'</tr>'
+ ).join('')+'</tbody></table></div>'+(ownerRows.length?'':'<p>No matching records.</p>')+(result.more?'<p>Showing 500 results. Narrow your search for additional records.</p>':'');
   byId('ownerSearch').onsubmit=e=>{e.preventDefault();ownerQuery=e.target.elements.query.value;if(ownerTab==='users')ownerStatus=e.target.elements.status.value;showOwnerConsole()};
   document.querySelectorAll('[data-owner-row]').forEach(b=>b.onclick=()=>ownerEdit(ownerRows[Number(b.dataset.ownerRow)]));
   if(byId('newInvoice'))byId('newInvoice').onclick=()=>ownerCreate('invoice');
   if(byId('newSupport'))byId('newSupport').onclick=()=>ownerCreate('support');
  }catch(e){byId('ownerError').textContent=e.message}
 }
+function ownerColumnLabel(column){
+ return {id:'ID',email:'Email',deleted_at:'Deleted at'}[column]||column[0].toUpperCase()+column.slice(1).replaceAll('_',' ');
+}
+function ownerCellValue(row,column){
+ if(column==='access')return ownerAccessLabel(row);
+ if(column==='amount')return money(row.amount_minor,row.currency);
+ if(column==='suspended'||column==='platform_blocked')return row[column]?'Yes':'No';
+ if(column==='active')return row[column]?'Active':'Suspended';
+ return row[column]??'—';
+}
 function ownerInput(label,name,value='',type='text',required=true){return '<label>'+label+'<input name="'+name+'" type="'+type+'" value="'+safe(value)+'" '+(required?'required':'')+(type==='number'?' min="0.01" step="0.01"':'')+'></label>'}
 function ownerSelect(label,name,options,value){return '<label>'+label+'<select name="'+name+'">'+options.map(v=>'<option value="'+safe(v)+'" '+(v===value?'selected':'')+'>'+safe(v)+'</option>').join('')+'</select></label>'}
 function ownerForm(title,html,endpoint,extra={},transform=x=>x){
- const d=settingsDialog(title,'<form class="fields">'+html+'<button class="primary">Save changes</button></form>');
+ const d=settingsDialog(title,'<form class="fields owner-form">'+html+'<button class="primary">Save changes</button></form>');
  d.querySelector('form').onsubmit=async e=>{e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;try{const body=transform({...Object.fromEntries(new FormData(e.target)),...extra});await send('/api/owner/'+endpoint,body);d.close();await showOwnerConsole()}catch(error){d.querySelector('.settingsError').textContent=error.message}finally{button.disabled=false}};return d;
 }
 function ownerEdit(row){
