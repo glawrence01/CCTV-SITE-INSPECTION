@@ -42,12 +42,17 @@ if(kind==='registerBatch'){
   return await registerCameras(env.DB,payload,bid);
 }
 if(update && user.role !== 'technician' && !['action','register'].includes(kind))return reply('Inspection history is read only.',400);
+const needsCameras=['round','camera','recorder'].includes(kind);
+const installed=needsCameras?await installedCameraRegistry(env.DB,bid,payload):null;
+if(needsCameras&&!installed.size)return reply('Register at least one installed camera for this DVR/NVR before inspecting it.',400);
 if(kind==='round'){
   if(!/^[a-f0-9-]{36}$/i.test(id)||!payload||!Array.isArray(payload.channels))return reply('Invalid inspection.',400);
   const statuses=['Unchecked','Working','No view','Faulty camera','Faulty cable','Empty port'];
   const channels=payload.channels;
   if(!channels.length||channels.length>128||channels.some(c=>!c||!statuses.includes(c.status)||typeof c.camera!=='string'||typeof c.location!=='string'||c.camera.length>200||c.location.length>200))return reply('Mark at least one channel and check the channel list.',400);
-  const record={channels:channels.map(({status,camera,location})=>({status,camera,location}))};
+  const matched=channels.map(channel=>installed.get(channel.camera.trim().toLowerCase()));
+  if(matched.some(camera=>!camera)||new Set(matched).size!==channels.length)return reply('Choose distinct installed cameras registered to this DVR/NVR.',400);
+  const record={channels:channels.map(({status},i)=>({status,...matched[i]}))};
   for(const field of [...common,'recorder','remarks']){
     const value=payload[field];
     if(typeof value!=='string'||value.length>3000||(field!=='remarks'&&!value.trim()))return reply('Complete the inspection details.',400);
@@ -65,6 +70,11 @@ if(kind==='round'){
 if(!Object.hasOwn(required,kind)||!payload||typeof payload!=='object'||!/^[0-9a-f-]{36}$/i.test(id))return reply('Invalid record.',400);
 let body={};for(let k of [...required[kind],...allowed[kind]]){if(typeof payload[k]==='string')body[k]=payload[k].trim();if((body[k]?.length||0)>3000)return reply('Entry too long.',400)}
 if(required[kind].some(k=>!body[k])||(kind==='register'&&body.installation==='Installed'&&!body.recorder))return reply('Complete the required fields.',400);
+if(kind==='camera'){
+  const camera=installed.get(body.camera.toLowerCase());
+  if(!camera)return reply('Choose an installed camera registered to this DVR/NVR.',400);
+  Object.assign(body,camera);
+}
 if(kind==='incident'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(body.date)||!Number.isFinite(Date.parse(body.date))||new Date(body.date).toISOString().slice(0,10)!==body.date||!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.time))return reply('Enter a valid incident date and time.',400);
   if(body.endTime&&(!/^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime)||body.endTime<body.time))return reply('End time must be on or after the start time on the same day.',400);
@@ -72,6 +82,10 @@ if(kind==='incident'){
 }
 if(kind==='recorder'){const invalid=validateSystemChecks(body);if(invalid)return invalid;}
 return await saveInspectionRecord(env,user,{id,kind,body,update,version});}catch(e){if(String(e).includes('UNIQUE'))return reply('That camera number is already registered on this DVR/NVR at this school.',409);return reply('Records are unavailable. Please try again.',503)}}
+async function installedCameraRegistry(db,bid,payload){
+  const {results}=await db.prepare("SELECT json_extract(payload,'$.camera') AS camera,json_extract(payload,'$.location') AS location FROM records WHERE business_id=? AND kind='register' AND json_extract(payload,'$.school')=? AND lower(trim(json_extract(payload,'$.recorder')))=lower(?) AND json_extract(payload,'$.installation')='Installed'").bind(bid,payload.school,payload.recorder).all();
+  return new Map(results.map(row=>[row.camera.trim().toLowerCase(),row]));
+}
 function validateSystemChecks(body){
   if(Object.entries(systemChoices).some(([field,options])=>body[field]&&!options.includes(body[field])))return reply('Choose a valid system status.',400);
   if(body.replacements){

@@ -137,7 +137,14 @@ const audit=await (await call('platform','/api/owner/audit')).json();assert.ok(a
 await status(await call('platform','/api/owner/user-status',{id:'staff',blocked:1,reason:'Cross origin'},null,'https://evil.test'),403);
 console.log('PASS owner-only access, customer-data boundary, platform suspension enforcement, manual billing arithmetic, support tracking, redacted email log and audit history');
 
-const systemRound={id:crypto.randomUUID(),kind:'round',payload:{school:'School A',date:lagosDate(0),time:'16:30',officer:'Alice',shift:'Day',recorder:'DVR 1',remarks:'',channels:[{status:'Unchecked',camera:'CH 1',location:'Entrance'}],storage:'Failed',dateAccuracy:'Accurate',timeAccuracy:'Incorrect',replacements:'Power pack, HDD'}};
+const systemRound={id:crypto.randomUUID(),kind:'round',payload:{school:'School A',date:lagosDate(0),time:'16:30',officer:'Alice',shift:'Day',recorder:'DVR 1',remarks:'',channels:[{status:'Unchecked',camera:row.camera,location:'Untrusted location'}],storage:'Failed',dateAccuracy:'Accurate',timeAccuracy:'Incorrect',replacements:'Power pack, HDD'}};
+await status(await call('alice','/api/recorders',{property_id:aliceProperty.id,name:'Empty NVR',type:'NVR'}),201);
+for(const kind of ['round','camera','recorder']){
+  const blocked=await call('alice','/api/records',{...systemRound,kind,payload:{...systemRound.payload,recorder:'Empty NVR'}});
+  assert.equal(blocked.status,400);
+  assert.match(await blocked.text(),/Register at least one installed camera/);
+}
+await status(await call('alice','/api/records',{...systemRound,id:crypto.randomUUID(),payload:{...systemRound.payload,channels:[{status:'Working',camera:'Unknown camera',location:'Lobby'}]}}),400);
 await status(await call('alice','/api/records',systemRound),200);
 await status(await call('alice','/api/records',{...systemRound,id:crypto.randomUUID(),payload:{...systemRound.payload,replacements:'Unknown'}}),400);
 const action={id:crypto.randomUUID(),kind:'action',payload:{school:'School A',date:lagosDate(0),time:'16:35',officer:'Alice',shift:'Day',action:'Replace recorder disk',state:'Open',owner:'first@example.test, second@example.test, first@example.test'}};
@@ -147,6 +154,7 @@ const updatedRecords=await (await call('alice','/api/records')).json();
 assert.equal(updatedRecords.find(r=>r.id===action.id).owner,'first@example.test, second@example.test');
 assert.equal(updatedRecords.find(r=>r.id===systemRound.id).replacements,'Power pack, HDD');
 assert.equal(updatedRecords.find(r=>r.id===systemRound.id).timeAccuracy,'Incorrect');
+assert.equal(updatedRecords.find(r=>r.id===systemRound.id).channels[0].location,row.location);
 
 const requests=[];
 const authFetch=globalThis.fetch;
