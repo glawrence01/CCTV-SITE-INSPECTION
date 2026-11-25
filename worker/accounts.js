@@ -67,19 +67,21 @@ async function accountRoutes(req,env,user,url){
     if(body.business_id&&body.business_id!==bid)return reply('Business access denied.',403);
     const permissions=JSON.stringify([...new Set(body.permissions)]);
     if(body.id){
-      const target=await env.DB.prepare('SELECT id,role FROM accounts WHERE id=? AND business_id=?').bind(body.id,bid).first();
+      const target=await env.DB.prepare('SELECT id,role,deleted_at FROM accounts WHERE id=? AND business_id=?').bind(body.id,bid).first();
       if(!target)return reply('User not found in your business.',404);
+      if(target.deleted_at)return reply('This account must be restored by the software owner.',409);
       if(target.role==='super_admin')return reply('The business owner keeps Super Admin access.',400);
-      await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=?').bind(body.role,permissions,body.active,body.id,bid).run();
+      await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=? AND deleted_at IS NULL').bind(body.role,permissions,body.active,body.id,bid).run();
     }else{
       const email=typeof body.email==='string'?body.email.trim().toLowerCase():'';
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)return reply('Enter a valid email address.',400);
-      const target=await env.DB.prepare('SELECT id,business_id,role FROM accounts WHERE email=?').bind(email).first();
+      const target=await env.DB.prepare('SELECT id,business_id,role,deleted_at FROM accounts WHERE email=?').bind(email).first();
       const pending=await env.DB.prepare('SELECT business_id FROM access_invites WHERE email=?').bind(email).first();
       if((target?.business_id&&target.business_id!==bid)||(pending&&pending.business_id!==bid))return reply('This email cannot be added to this business. Use a different email.',409);
+      if(target?.deleted_at)return reply('This account must be restored by the software owner.',409);
       if(target?.role==='super_admin')return reply('The business owner keeps Super Admin access.',400);
       if(target?.business_id===bid){
-        await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=?').bind(body.role,permissions,body.active,target.id,bid).run();
+        await env.DB.prepare('UPDATE accounts SET role=?,permissions=?,active=? WHERE id=? AND business_id=? AND deleted_at IS NULL').bind(body.role,permissions,body.active,target.id,bid).run();
       }else{
         await env.DB.prepare('INSERT INTO access_invites(email,business_id,role,permissions,active) VALUES(?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET role=excluded.role,permissions=excluded.permissions,active=excluded.active WHERE access_invites.business_id=excluded.business_id').bind(email,bid,body.role,permissions,body.active).run();
       }
@@ -181,6 +183,7 @@ async function handleRequest(req,env){
   }
   const user=await identity(req,env);
   if(!user)return reply('Please sign in with a verified email.',401);
+  if(user.deleted_at)return reply('This account has been deleted. Contact the software owner to request restoration.',403);
   if(user.platform_blocked)return reply('This account has been suspended by the software owner.',403);
   if(!user.active&&!(isPlatformOwner(user,env)&&(path.startsWith('/api/owner/')||path==='/api/me'||path==='/api/password')))return reply('This account has been suspended. Contact your business administrator.',403);
   if(path.startsWith('/api/owner/'))return ownerRoutes(req,env,user,url);

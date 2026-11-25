@@ -7,12 +7,22 @@ async function ownerRoutes(req,env,user,url){
   const search=(url.searchParams.get('q')||'').slice(0,200),pattern='%'+search+'%';
   if(endpoint==='summary'){
    const counts={};for(const table of ['businesses','accounts','access_invites','support_cases'])counts[table]=(await env.DB.prepare('SELECT count(*) AS n FROM '+table).first()).n;
+   const access=(await env.DB.prepare('SELECT count(CASE WHEN deleted_at IS NOT NULL THEN 1 END) AS deleted_accounts, count(CASE WHEN deleted_at IS NULL AND (active=0 OR platform_blocked=1) THEN 1 END) AS suspended_accounts FROM accounts').first());
+   Object.assign(counts,access);
    const unpaid=(await env.DB.prepare("SELECT currency,sum(amount_minor) AS amount_minor,count(*) AS count FROM invoices WHERE status='Unpaid' GROUP BY currency").all()).results;
    return jsonResponse({counts,unpaid,billing_mode:'Manual records; no automatic charges or payment verification',email_status:'Provider acceptance only; delivery and bounce tracking are not connected'});
   }
+  const accountStatus={
+   all:'1=1',
+   active:'a.deleted_at IS NULL AND a.active=1 AND a.platform_blocked=0',
+   suspended:'a.deleted_at IS NULL AND (a.active=0 OR a.platform_blocked=1)',
+   deleted:'a.deleted_at IS NOT NULL'
+  };
+  const accessFilter=url.searchParams.get('status')||'all';
+  if(endpoint==='users'&&!Object.hasOwn(accountStatus,accessFilter))return reply('Choose a valid access filter.',400);
   const queries={
    businesses:[`SELECT b.*,s.plan,s.status,s.renewal,s.notes,(SELECT count(*) FROM accounts a WHERE a.business_id=b.id) AS users,(SELECT count(*) FROM records r WHERE r.business_id=b.id AND kind='register') AS cameras FROM businesses b LEFT JOIN subscriptions s ON s.business_id=b.id WHERE b.name LIKE ? ORDER BY b.name LIMIT 501`,[pattern]],
-   users:[`SELECT a.id,a.email,a.role,a.active,a.platform_blocked,b.name AS business FROM accounts a LEFT JOIN businesses b ON b.id=a.business_id WHERE a.email LIKE ? OR b.name LIKE ? ORDER BY a.email LIMIT 501`,[pattern,pattern]],
+   users:[`SELECT a.id,a.email,a.role,a.active,a.platform_blocked,a.deleted_at,coalesce(b.suspended,0) AS business_suspended,b.name AS business FROM accounts a LEFT JOIN businesses b ON b.id=a.business_id WHERE (a.email LIKE ? OR b.name LIKE ?) AND ${accountStatus[accessFilter]||'1=1'} ORDER BY a.email LIMIT 501`,[pattern,pattern]],
    pending:[`SELECT i.email,i.role,i.active,b.name AS business FROM access_invites i JOIN businesses b ON b.id=i.business_id WHERE i.email LIKE ? OR b.name LIKE ? ORDER BY i.email LIMIT 501`,[pattern,pattern]],
    invoices:[`SELECT i.*,b.name AS business FROM invoices i JOIN businesses b ON b.id=i.business_id WHERE b.name LIKE ? OR i.description LIKE ? OR i.id LIKE ? ORDER BY i.created DESC,i.id DESC LIMIT 501`,[pattern,pattern,pattern]],
    support:[`SELECT s.*,b.name AS business FROM support_cases s LEFT JOIN businesses b ON b.id=s.business_id WHERE s.email LIKE ? OR s.subject LIKE ? ORDER BY s.created DESC LIMIT 501`,[pattern,pattern]],
@@ -32,14 +42,8 @@ async function ownerRoutes(req,env,user,url){
   await auditStatement(env,user,'email-'+body.action,short(body.email),{accepted:result.ok}).run();
   return result.ok?jsonResponse({saved:true}):reply('Email request rejected. Check rate limits and email provider settings.',400);
  }
- if(endpoint==='user-status'){
-  target=short(body.id);if(![0,1].includes(body.blocked))return reply('Choose a valid account status.',400);
-  const member=await env.DB.prepare('SELECT id,email FROM accounts WHERE id=?').bind(target).first();
-  if(!member)return reply('Account not found.',404);
-  if(isPlatformOwner(member,env))return reply('The software-owner account cannot be suspended here.',400);
-  if(!short(body.reason))return reply('Enter a reason for this change.',400);
-  statement=env.DB.prepare('UPDATE accounts SET platform_blocked=? WHERE id=?').bind(body.blocked,target);details={blocked:body.blocked,reason:short(body.reason).slice(0,1000)};
- }else if(endpoint==='business-status'){
+ if(endpoint==='user-status')return updateOwnerAccount(env,user,body);
+ if(endpoint==='business-status'){
   target=short(body.id);if(![0,1].includes(body.suspended)||!short(body.reason))return reply('Choose status and enter a reason.',400);
   if(!await env.DB.prepare('SELECT id FROM businesses WHERE id=?').bind(target).first())return reply('Business not found.',404);
   statement=env.DB.prepare('UPDATE businesses SET suspended=? WHERE id=?').bind(body.suspended,target);details={suspended:body.suspended,reason:short(body.reason).slice(0,1000)};
@@ -73,6 +77,32 @@ async function ownerRoutes(req,env,user,url){
   statement=env.DB.prepare('UPDATE support_cases SET status=?,resolution=? WHERE id=?').bind(body.status,short(body.resolution).slice(0,3000),target);details={status:body.status,note:short(body.resolution).slice(0,3000)};
  }else return reply('Not found',404);
  await env.DB.batch([statement,auditStatement(env,user,endpoint,target,details)]);
+ return jsonResponse({saved:true,id:target});
+}
+async function updateOwnerAccount(env,owner,body){
+ const target=typeof body.id==='string'?body.id.trim():'';
+ const reason=typeof body.reason==='string'?body.reason.trim():'';
+ const action=body.action??(body.blocked===1?'suspend':body.blocked===0?'clear-platform-suspension':'');
+ if(!target||!reason||reason.length>1000||!['suspend','activate','delete','restore','clear-platform-suspension'].includes(action))return reply('Choose an account action and enter a reason of up to 1,000 characters.',400);
+ const db=env.DB;
+ const member=await db.prepare('SELECT id,email,active,platform_blocked,deleted_at FROM accounts WHERE id=?').bind(target).first();
+ if(!member)return reply('Account not found.',404);
+ if(isPlatformOwner(member,env))return reply('The software-owner account is protected.',400);
+ if(member.deleted_at&&action!=='restore')return reply('Restore this account before changing its access.',409);
+ if(!member.deleted_at&&action==='restore')return reply('Only a deleted account can be restored.',409);
+ const before={active:member.active,blocked:member.platform_blocked,deleted_at:member.deleted_at};
+ const after={...before};
+ if(action==='suspend')after.blocked=1;
+ if(action==='activate'||action==='clear-platform-suspension')after.blocked=0;
+ if(action==='activate')after.active=1;
+ if(action==='delete')after.deleted_at=new Date().toISOString();
+ if(action==='restore')after.deleted_at=null;
+ const update=db.prepare('UPDATE accounts SET active=?,platform_blocked=?,deleted_at=? WHERE id=? AND active=? AND platform_blocked=? AND deleted_at IS ?')
+   .bind(after.active,after.blocked,after.deleted_at,target,before.active,before.blocked,before.deleted_at);
+ const audit=db.prepare('INSERT INTO admin_audit(id,actor,action,target,details) SELECT ?,?,?,?,? WHERE changes()=1')
+   .bind(crypto.randomUUID(),owner.email,'user-status',target,JSON.stringify({action,reason,before,after}));
+ const [result]=await db.batch([update,audit]);
+ if(!result.meta.changes)return reply('Account access changed. Refresh the list and try again.',409);
  return jsonResponse({saved:true,id:target});
 }
 function validDate(value){return typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value}

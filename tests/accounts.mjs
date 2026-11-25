@@ -172,3 +172,26 @@ assert.deepEqual(requests[0].body.to,['first@example.test','second@example.test'
 assert.match(requests[0].key,/^cctv-action\//);
 assert.equal((await (await call('alice','/api/records',emailAction)).json()).email,'unchanged');
 assert.equal(requests.length,1);
+
+const lifecycle=(action,actor='platform',id='staff')=>call(actor,'/api/owner/user-status',{id,action,reason:'Lifecycle verification'});
+await status(await lifecycle('delete','alice'),403);
+await status(await lifecycle('delete','platform','platform'),400);
+await status(await call('alice','/api/admin/users',{id:'staff',role:'technician',active:0,permissions:['manage_incidents']}),200);
+await status(await lifecycle('activate'),200);
+await status(await call('staff','/api/me'),200);
+await status(await lifecycle('suspend'),200);
+await status(await lifecycle('delete'),200);
+await status(await call('staff','/api/me'),403);
+await status(await lifecycle('activate'),409);
+await status(await call('alice','/api/admin/users',{id:'staff',role:'technician',active:1,permissions:[]}),409);
+const deleted=await (await call('platform','/api/owner/users?status=deleted')).json();
+assert.equal(deleted.rows.length,1);
+assert.equal(deleted.rows[0].id,'staff');
+await status(await lifecycle('restore'),200);
+await status(await call('staff','/api/me'),403);
+await status(await lifecycle('activate'),200);
+const restored=await (await call('staff','/api/me')).json();
+assert.deepEqual(restored.permissions,['manage_incidents']);
+const history=await (await call('platform','/api/owner/audit?q=staff')).json();
+assert.ok(history.rows.some(row=>JSON.parse(row.details).action==='delete'));
+assert.ok(history.rows.some(row=>JSON.parse(row.details).action==='restore'));
